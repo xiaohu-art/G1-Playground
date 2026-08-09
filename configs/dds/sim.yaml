@@ -1,0 +1,8 @@
+# @package _global_
+# MuJoCo sim2sim: DDS domain 1 on loopback; keyboard teleop
+dds:
+  channel_id: 1
+  network_interface: lo
+policy:
+  command:
+    source: keyboard

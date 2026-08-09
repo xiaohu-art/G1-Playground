@@ -9,6 +9,9 @@ dependencies = [
     "mujoco>=3.3.0",
     "pygame>=2.6.1",
     "unitree-sdk2py",
+    "onnxruntime==1.23.2",
+    "hydra-core>=1.3.5",
+    "pynput>=1.8.2",
 ]
 
 [build-system]

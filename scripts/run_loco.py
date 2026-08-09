@@ -1,30 +1,29 @@
-import argparse
 import sys
 import time
 
+import hydra
+from omegaconf import DictConfig, OmegaConf
+
 from g1_playground.dds import create_dds_topic_to_communicate_with_g1
+
+from g1_playground.policies.loco.policy import LocoPolicy
 from g1_playground.robot import UnitreeG1Robot
-from g1_playground.policies.ankle_swing import AnkleSwingPolicy
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run the ankle swing demo policy on the G1 robot.")
-    parser.add_argument("--network_interface", default=None,
-                        help="Network interface for real robot or MuJoCo sim (e.g. enp2s0, lo)")
-    parser.add_argument("--dds_channel_id", type=int, default=1,
-                        help="DDS domain channel ID (default: 1 for sim, use 0 for real robot)")
-    args = parser.parse_args()
+@hydra.main(version_base=None, config_path="../configs", config_name="run_loco")
+def main(cfg: DictConfig) -> None:
+    policy = LocoPolicy(OmegaConf.to_container(cfg.policy, resolve=True))
 
     print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
+    print(f"DDS: channel {cfg.dds.channel_id}, interface {cfg.dds.network_interface}")
     try:
         input("Press Enter to continue...")
     except KeyboardInterrupt:
         print("\nAborted before start.")
         return
 
-    create_dds_topic_to_communicate_with_g1(args.dds_channel_id, args.network_interface)
+    create_dds_topic_to_communicate_with_g1(cfg.dds.channel_id, cfg.dds.network_interface)
 
-    policy = AnkleSwingPolicy()
     robot = UnitreeG1Robot(policy=policy)
 
     try:

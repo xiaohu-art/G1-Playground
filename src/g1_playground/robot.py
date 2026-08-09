@@ -275,7 +275,9 @@ class UnitreeG1Robot:
             self.right_hand_cmd_publisher.Write(self.right_hand_cmd)
 
     def _apply_body_action(self, action: JointAction):
-        self.low_cmd.mode_pr = action.mode_pr
+        # PR (0): series pitch/roll ankle control — the only mode any deployed
+        # policy uses. (AB (1) = parallel A/B actuator semantics, unused.)
+        self.low_cmd.mode_pr = 0
         self.low_cmd.mode_machine = self.mode_machine
         kp = action.kp if action.kp is not None else DEFAULT_KP
         kd = action.kd if action.kd is not None else DEFAULT_KD
@@ -350,7 +352,7 @@ class UnitreeG1Robot:
         kd[LEFT_HAND_SLICE] = 0.0
         kd[RIGHT_HAND_SLICE] = 0.0
 
-        return JointAction(q=q, kp=kp, kd=kd, mode_pr=last.mode_pr)
+        return JointAction(q=q, kp=kp, kd=kd)
 
     def stop(self):
         """Best-effort shutdown: inject a release action so the hands go limp.
