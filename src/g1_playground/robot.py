@@ -125,7 +125,6 @@ class UnitreeG1Robot:
 
         self._target_action: JointAction | None = None
         self._target_lock = threading.Lock()
-        self._stopping = False
         self.crc = CRC()
 
     def initialize(self):
@@ -145,6 +144,7 @@ class UnitreeG1Robot:
         self.msc = MotionSwitcherClient()
         self.msc.SetTimeout(5.0)
         self.msc.Init()
+        self._released_mode_name = None  # remembered so stop() can restore it
         while True:
             status, result = self.msc.CheckMode()
             if result is None:
@@ -152,6 +152,7 @@ class UnitreeG1Robot:
                 return
             if not result.get("name"):
                 return
+            self._released_mode_name = result["name"]
             self.msc.ReleaseMode()
             time.sleep(1)
 
@@ -258,8 +259,7 @@ class UnitreeG1Robot:
             return
         action = self.policy.step(self._build_state())
         with self._target_lock:
-            if not self._stopping:
-                self._target_action = action
+            self._target_action = action
 
     def _control_step(self):
         with self._target_lock:
@@ -320,50 +320,9 @@ class UnitreeG1Robot:
         """
         return (motor_id & 0x0F) | ((status & 0x07) << 4) | ((1 if timeout else 0) << 7)
 
-    def _build_release_action(self) -> JointAction:
-        """Build an action that holds the body in its last commanded pose and releases the hands.
-
-        The hand portion of q/kp/kd is zeroed so the Dex3 motors go limp. The body
-        portion is copied from the last policy output so the legs/arms keep doing
-        whatever they were doing. Releasing the body with kp=0 could let a standing
-        robot collapse, so we deliberately do not touch it.
-        """
-        with self._target_lock:
-            last = self._target_action
-        if last is None:
-            raise RuntimeError("Cannot build release action: no prior action exists.")
-
-        q = last.q.copy()
-        kp = (
-            last.kp.copy()
-            if last.kp is not None
-            else np.concatenate([DEFAULT_KP, DEFAULT_HAND_KP, DEFAULT_HAND_KP])
-        )
-        kd = (
-            last.kd.copy()
-            if last.kd is not None
-            else np.concatenate([DEFAULT_KD, DEFAULT_HAND_KD, DEFAULT_HAND_KD])
-        )
-
-        q[LEFT_HAND_SLICE] = 0.0
-        q[RIGHT_HAND_SLICE] = 0.0
-        kp[LEFT_HAND_SLICE] = 0.0
-        kp[RIGHT_HAND_SLICE] = 0.0
-        kd[LEFT_HAND_SLICE] = 0.0
-        kd[RIGHT_HAND_SLICE] = 0.0
-
-        return JointAction(q=q, kp=kp, kd=kd)
-
     def stop(self):
-        """Best-effort shutdown: inject a release action so the hands go limp.
-
-        RecurrentThread in unitree_sdk2py has no clean stop API. Wait() joins the
-        thread but the thread loops forever, so it would block. The threads die
-        when the process exits, so call sys.exit() or let main() return after stop().
-        """
-        if self.has_hands and self._target_action is not None:
-            release = self._build_release_action()
-            with self._target_lock:
-                self._target_action = release
-                self._stopping = True
-            time.sleep(0.05)  # let the control thread publish the release ~25 times at 500 Hz
+        if hasattr(self, "policy_thread"):
+            self.policy_thread.Wait(1.0)   # sets the quit flag and joins
+            self.control_thread.Wait(1.0)
+        if getattr(self, "_released_mode_name", None):
+            self.msc.SelectMode(self._released_mode_name)

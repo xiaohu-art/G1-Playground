@@ -6,13 +6,13 @@ from omegaconf import DictConfig, OmegaConf
 
 from g1_playground.dds import create_dds_topic_to_communicate_with_g1
 
-from g1_playground.policies.loco.policy import LocoPolicy
+from g1_playground.policies.track.policy import TrackPolicy
 from g1_playground.robot import UnitreeG1Robot
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="run_loco")
+@hydra.main(version_base=None, config_path="../configs", config_name="run_track")
 def main(cfg: DictConfig) -> None:
-    policy = LocoPolicy(OmegaConf.to_container(cfg.policy, resolve=True))
+    policy = TrackPolicy(OmegaConf.to_container(cfg.policy, resolve=True))
 
     print("WARNING: Please ensure there are no obstacles around the robot while running this example.")
     print(f"DDS: channel {cfg.dds.channel_id}, interface {cfg.dds.network_interface}")
