@@ -23,7 +23,7 @@ def setup_logger(name: str = "robojudo") -> logging.Logger:
         return logger
 
     logger.setLevel(logging.DEBUG)
-    logger.propagate = False  # to avoid duplicate logs from phc
+    logger.propagate = False
 
     color_formatter = colorlog.ColoredFormatter(
         fmt="%(log_color)s%(asctime)s.%(msecs)03d [%(levelname)s] [%(name)s] %(message)s",

@@ -18,12 +18,8 @@ def __getattr__(name: str) -> type[Pipeline]:
         pipeline_class = pipeline_registry.get(name)
     except Exception as e:
         raise AttributeError(f"module {__name__} has no attribute {name}") from e
-    print(f"[Pipeline] Dynamic import of Pipeline: {name}")
     globals()[name] = pipeline_class
     return pipeline_class
 
 
-# ===== Declare all your custom pipelines here =====
 pipeline_registry.add("RlPipeline", ".rl_pipeline")
-pipeline_registry.add("RlMultiPolicyPipeline", ".rl_multi_policy_pipeline")
-pipeline_registry.add("RlLocoMimicPipeline", ".rl_loco_mimic_pipeline")

@@ -38,19 +38,15 @@ class DoFAdapter:
     def __init__(self, src_joint_names, tar_joint_names):
         self.src_joint_names = src_joint_names
         self.tar_joint_names = tar_joint_names
-
         self.src_len = len(src_joint_names)
         self.tar_len = len(tar_joint_names)
+        if self.src_len != self.tar_len or set(src_joint_names) != set(tar_joint_names):
+            raise ValueError("DoFAdapter only supports reordering the complete 29-joint G1 set")
+        if len(set(src_joint_names)) != self.src_len:
+            raise ValueError("Joint names must be unique")
 
-        self.src_indices = []
-        self.tar_indices = []
-
-        for i, name in enumerate(src_joint_names):
-            if name in tar_joint_names:
-                self.src_indices.append(i)
-                self.tar_indices.append(tar_joint_names.index(name))
-
-        assert len(self.src_indices) > 0, "Error fitting src and tar joint names, please check the config."
+        self.src_indices = list(range(self.src_len))
+        self.tar_indices = [tar_joint_names.index(name) for name in src_joint_names]
 
     def fit(self, data, dim=-1, template=None) -> np.ndarray:
         if type(data) is not np.ndarray:
@@ -83,14 +79,3 @@ class DoFAdapter:
             new_data[tuple(indices)] = data[tuple(src_indices)]
 
         return new_data
-
-
-if __name__ == "__main__":
-    from pprint import pprint
-
-    from robojudo.config.g1.env.g1_env_cfg import G1_29DoF
-    from robojudo.config.g1.policy.g1_unitree_policy_cfg import G1UnitreeDoF
-    from robojudo.tools.tool_cfgs import DoFConfig
-
-    dof_config = merge_dof_cfgs(G1_29DoF(), G1UnitreeDoF())
-    pprint(dof_config)

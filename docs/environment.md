@@ -1,101 +1,54 @@
-# Environment
+# Environments
 
-**Environment** is the component that interact with the robot. It receives the action from the policy and executes it on the robot.
+An environment supplies robot state to `UnitreeWoGaitPolicy` and applies its joint position targets. RoboJuDo exposes two
+G1 29DoF environments:
 
-## [Environment](#environment)
-`Environment`. It is an abstract class that defines the interface for the environment. The environment can be either a real robot or a simulated robot.
+| Environment | Purpose | Configuration |
+| --- | --- | --- |
+| `MujocoEnv` | Local simulation | `g1` / `G1MujocoEnvCfg` |
+| `UnitreeCppEnv` | Real Unitree G1 | `g1_real` / `G1RealEnvCfg` |
 
-`Environment` offer feedback properties. including:
-- `dof_pos`: `np.ndarray`: the angle of the joints.
-- `dof_vel`: `np.ndarray`: the velocity of the joints.
-- `base_quat`: `np.ndarray`: the quaternion of the root. `w` last.
-- `base_ang_vel`: `np.ndarray`: the angular velocity of the root.
-- `base_lin_acc`: `np.ndarray`: the linear acceleration of the root.
+The common interface is defined in [`base_env.py`](../robojudo/environment/base_env.py).
 
-**optional variables, may not be available in all envs according to config:**
-- `base_pos`: `np.ndarray`: the 3D position of the root.
-- `base_lin_vel`: `np.ndarray`: the linear velocity of the root.
-- `torso_pos`: `np.ndarray`: the 3D position of the torso.
-- `torso_quat`: `np.ndarray`: the quaternion of the torso.
-- `torso_ang_vel`: `np.ndarray`: the angular velocity of the torso.
-- `fk_info`: `dict`: the forward kinematics information:
-  - `{body_name}`:
-    - `pos`: `np.ndarray`: the 3D position of the each link.
-    - `quat`: `np.ndarray`: the quaternion of the each link. `w` last.
-    - `ang_vel`: `np.ndarray`: the angular velocity of the each link.
-    - `lin_vel`: `np.ndarray`: the linear velocity of the each link.
+## 29DoF Contract
 
-### ✨ Feature: Dynamic DoF Config
+Both environments expose the same policy inputs:
 
-The [`DoFConfig`](../robojudo/tools/tool_cfgs.py) in environments defines `joint_names`, `stiffness`, `default_pos`,etc. It supports:
-* **Subset extension & cropping** — easily handle locked DoFs using `_subset`.
-  * Example: [G1_12DoF](../robojudo/config/g1/g1_cfg.py).
-* **Dynamic override by policy config** — policies can override environment DoF settings, even when `joint_names` are not aligned.
-  * For instance, run a **12-DoF policy** on a **29-DoF environment**.
-* **Strict checks** — all configs are validated in `DoFConfig` to ensure safety.
+- `dof_pos`: 29 joint positions
+- `dof_vel`: 29 joint velocities
+- `base_quat`: base orientation in `[x, y, z, w]` order
+- `base_ang_vel`: three-axis base angular velocity
 
-### ✨ Feature: Born Place Alignment
+Each call to `step()` receives exactly 29 position targets. The environment configuration supplies the hardware torque
+and position limits; the policy configuration supplies its standing pose and tuned PD gains. Their joint lists must
+contain the same 29 names. A different ordering can be adapted, but partial joint control is rejected.
 
-The robot’s **base quaternion** and **base position** can be easily aligned during deployment. 
+## MujocoEnv
 
-This allows the robot’s starting pose to be corrected to the expected zero point, without adding complex world2init transformations inside the policy.
+[`mujoco_env.py`](../robojudo/environment/mujoco_env.py) loads
+`assets/robots/g1/g1_29dof_rev_1_0.xml` and applies position targets through the configured PD gains. The default simulation
+step is `0.001 s` with a decimation of 20, matching the policy's 50 Hz control rate.
 
-### ✨ Feature: Odometry Support
+Install the viewer and run the simulation from the repository root:
 
-RoboJuDo supports odometry, enabling tracking of the robot’s global position and velocity. We have two options now:
-- `ZED`: Use a ZED camera for odometry. `zed_proxy` submodule is needed.
-- `UNITREE`: Use the built-in sport state service of Unitree robots.
+```bash
+python scripts/install_third_party.py
+python scripts/run_pipeline.py -c g1
+```
 
-This allows policies and controllers to leverage absolute positioning for more reliable deployment and motion alignment.
+Use this environment to verify standing behavior, command directions, saturation, falls, and shutdown before every
+hardware change.
 
-### ✨ Feature: Forward Kinematic
-RoboJuDo provides simple access to rich information such as link poses, joint positions, and end-effector states. This makes it easy to implement advanced controllers and monitoring tools without additional computation overhead.
+## UnitreeCppEnv
 
-> 💡Tips: You can use the debug_viz option for real-time sim2real monitoring. Check [ForwardKinematicCfg](../robojudo/tools/tool_cfgs.py)
+[`unitree_cpp_env.py`](../robojudo/environment/unitree_cpp_env.py) exchanges low-level state and position commands through
+Unitree SDK2 using the [`unitree_cpp`](https://github.com/HansZ8/unitree_cpp) binding. The robot-facing interface is set by
+`net_if` in [`g1_real_env_cfg.py`](../robojudo/config/g1/env/g1_real_env_cfg.py).
 
-<img src="images/env-debug_viz.png" width="10%" alt="debug_viz"/>
+`UnitreeCppEnv` performs an SDK self-check during startup. Its `shutdown()` method disables further actions and invokes the
+SDK shutdown path. Installation and network preparation are documented in [Unitree G1 setup](unitree_setup.md).
 
----
-
-Check [Environment](../robojudo/environment/base_env.py) and [EnvCfg](../robojudo/environment/env_cfgs.py) for more details.
-
----
-
-We provide following Environments:
-- [DummyEnv](#environment--dummy_env)
-- [MujocoEnv](#environment--mujoco_env)
-- [UnitreeEnv](#environment--unitree_env)
-- [UnitreeCppEnv](#environment--unitreecppenv)
-
-## [Environment](#environment) > [DummyEnv](#environment--dummyenv)
-
-`DummyEnv` is the environment that does nothing. It is a subclass of `Environment` and implements the interface defined in `Environment`. It is mainly used for testing purposes. It will print some debug info when running.
-
-script: [dummy_env.py](../robojudo/environment/dummy_env.py)
-
-## [Environment](#environment) > [MujocoEnv](#environment--mujocoenv)
-
-`MujocoEnv` is the environment that simulates the robot using Mujoco. It is a subclass of `Environment` and implements the interface defined in `Environment`.
-
-script: [mujoco_env.py](../robojudo/environment/mujoco_env.py)
-
-## [Environment](#environment) > [UnitreeEnv](#environment--unitreeenv)
-
-
-`UnitreeEnv` is the environment that simulates the robot using Unitree's python SDK. It is a subclass of `Environment` and implements the interface defined in `Environment`.
-> [`unitree_sdk2py`](https://github.com/unitreerobotics/unitree_sdk2_python) is needed.
-
-script: [unitree_env.py](../robojudo/environment/unitree_env.py)
-
-
-## [Environment](#environment) > [UnitreeCppEnv](#environment--unitreecppenv)
-
-`UnitreeCppEnv` is the environment that simulates the robot using Unitree's C++ SDK. It is a subclass of `Environment` and implements the interface defined in `Environment`.
-
-script: [unitree_cpp_env.py](../robojudo/environment/unitree_cpp_env.py)
-
-> [UnitreeCpp](https://github.com/HansZ8/unitree_cpp) is needed.
-
-This environment is implemented with [UnitreeCpp](https://github.com/HansZ8/unitree_cpp). In our test onboard Unitree G1, `UnitreeCppEnv` is faster almost 100 times than `UnitreeEnv` in `step()`.
-
-
+> [!DANGER]
+> Passing startup checks does not prove that a checkpoint, joint order, gains, or network link is safe. Keep the hardware
+> emergency stop under direct operator control, keep people outside the robot's fall and reach envelope, and leave
+> `do_safety_check` enabled in `g1_real`.

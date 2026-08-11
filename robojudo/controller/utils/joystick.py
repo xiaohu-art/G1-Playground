@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "hide"
 
 
-# TODO: axis post processing
 class JoystickThread(Thread):
     def __init__(self, state_queue: Queue, event_queue: Queue):
         super().__init__(name="JoystickThread", daemon=True)
@@ -186,7 +185,7 @@ class JoystickThread(Thread):
 
 
 # Modified From unitree_sdk2_python
-class unitreeRemoteController:
+class UnitreeRemoteController:
     def __init__(self, state_queue, event_queue):
         self.state_queue = state_queue
         self.event_queue = event_queue

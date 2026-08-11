@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "RoboJuDo"
 version = "1.5.0"
-description = "RoboJuDo: A plug-and-play deploy framework for robots. Just deploy, just do."
+description = "RoboJuDo: A plug-and-play deployment framework for the Unitree G1 29DoF."
 authors = [
     { name = "HansZ8", email = "GDDG80@outlook.com" }
 ]
@@ -28,8 +28,8 @@ dev = [
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
-exclude = ["__pycache__", ".venv", "build", "dist", "logs", "data", "robojudo/controller/motion_lib", "robojudo/policy/hilo", "robojudo/policy/gmt","packages", "third_party"]
+target-version = "py311"
+exclude = ["__pycache__", ".venv", "build", "dist", "logs", "data", "third_party"]
 lint.select = ["E", "F", "I", "B", "UP"]
 lint.ignore = ["B008"]
 lint.fixable = ["ALL"]

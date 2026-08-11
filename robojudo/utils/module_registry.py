@@ -14,10 +14,8 @@ class Registry:
 
     @property
     def types(self) -> list[str]:
-        """
-        Get a list of all module types.
-        """
-        return list(self.modules.keys()) + list(self.registered_modules.keys())
+        """Return each known type once, preserving registration order."""
+        return list(dict.fromkeys([*self.modules, *self.registered_modules]))
 
     def add(self, type_name: str, module_path: str):
         """
@@ -32,7 +30,7 @@ class Registry:
         Register a new module.
         """
         if not issubclass(cls, self.BASE_CLASS):
-            raise ValueError(f"Controller must be a subclass of {self.BASE_CLASS.__name__}")
+            raise ValueError(f"{cls.__name__} must be a subclass of {self.BASE_CLASS.__name__}")
         self.registered_modules[cls.__name__] = cls
         return cls
 
@@ -54,5 +52,4 @@ class Registry:
             if type_name not in self.registered_modules:
                 raise RuntimeError(f"{self.PACKAGE}.{type_name} not registered after importing {module_path}")
 
-            print(f"[Registry][{self.PACKAGE}] {type_name}, total: {len(self.registered_modules)}")
         return self.registered_modules[type_name]

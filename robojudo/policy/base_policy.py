@@ -26,17 +26,12 @@ class Policy(ABC):
         self.num_dofs = self.cfg_obs_dof.num_dofs
         self.num_actions = self.cfg_action_dof.num_dofs
 
-        self.default_dof_pos = np.asarray(self.cfg_obs_dof.default_pos)
-        self.default_pos = np.asarray(self.cfg_action_dof.default_pos)  # TODO: remove
+        self.obs_default_pos = np.asarray(self.cfg_obs_dof.default_pos)
+        self.action_default_pos = np.asarray(self.cfg_action_dof.default_pos)
 
-        # TODO: autoload cfg
-        if self.cfg_policy.disable_autoload:
-            # self.model: torch.nn.Module | None = None # type: ignore
-            pass
-        else:
-            policy_file = self.cfg_policy.policy_file
-            logger.debug(f"Loading jit from {policy_file}...")
-            self.model = torch.jit.load(policy_file, map_location=self.device)
+        policy_file = self.cfg_policy.policy_file
+        logger.debug("Loading TorchScript policy from %s", policy_file)
+        self.model = torch.jit.load(policy_file, map_location=self.device)
 
         self.action_scale = self.cfg_policy.action_scale
         self.action_clip = self.cfg_policy.action_clip
@@ -55,15 +50,7 @@ class Policy(ABC):
 
     @abstractmethod
     def reset(self):
-        # self.last_action = np.zeros(self.num_actions) # TODO
         raise NotImplementedError
-
-    def reset_alignment(self):
-        """Reset heading/spatial alignment without resetting motion playback state.
-
-        Override in policies that compute a heading offset at runtime (e.g. ProtoMotions
-        trackers). The default no-op is correct for policies that don't have alignment state.
-        """
 
     @abstractmethod
     def post_step_callback(self, commands: list[str] | None = None):
@@ -81,7 +68,7 @@ class Policy(ABC):
         actions = actions_tensor.numpy().squeeze()
         actions = (1 - self.action_beta) * self.last_action + self.action_beta * actions
 
-        self.last_action = actions.copy()  # TODO
+        self.last_action = actions.copy()
 
         processed_actions = actions
         if self.action_clip is not None:
@@ -91,11 +78,8 @@ class Policy(ABC):
         return processed_actions
 
     def get_init_dof_pos(self) -> np.ndarray:
-        """
-        Return the initial dof pos for the policy, used for robot preparation.
-        For motion policies, this should return next/first frame of the reference motion.
-        """
-        return self.default_pos.copy()
+        """Return the standing pose used during robot preparation."""
+        return self.action_default_pos.copy()
 
     def debug_viz(self, visualizer, env_data, ctrl_data, extras):
         # for debug draw

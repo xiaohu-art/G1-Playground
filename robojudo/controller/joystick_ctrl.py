@@ -22,8 +22,6 @@ class JoystickCtrl(Controller):
         self.reset()
 
     def reset(self):
-        self.combination_init_buttons = self.cfg_ctrl.combination_init_buttons
-        self.onhold_buttons = set()
         while not self.state_queue.empty():
             try:
                 self.state_queue.get_nowait()
@@ -76,45 +74,10 @@ class JoystickCtrl(Controller):
             return ctrl_data, commands
 
         for event in ctrl_data["button_event"]:
-            if event["type"] == "button":
-                if event["name"] in self.combination_init_buttons:
-                    if event["pressed"]:
-                        self.onhold_buttons.add(event["name"])
-                    else:
-                        self.onhold_buttons.discard(event["name"])
-                else:
-                    if event["pressed"]:
-                        command = None
-                        if len(self.onhold_buttons) == 0:
-                            command = self.triggers.get(event["name"], None)
-                        else:
-                            event_combination = "+".join(sorted(list(self.onhold_buttons)) + [event["name"]])
-                            command = self.triggers.get(event_combination, None)
-                        if command is not None:
-                            commands.append(command)
-                            # remove event after triggered
-                            ctrl_data["button_event"].remove(event)
+            if event["type"] != "button" or not event["pressed"]:
+                continue
+            command = self.triggers.get(event["name"])
+            if command is not None:
+                commands.append(command)
 
         return ctrl_data, commands
-
-
-if __name__ == "__main__":
-    joystick_ctrl = JoystickCtrl(
-        cfg_ctrl=JoystickCtrlCfg(
-            triggers={
-                "A": "[TEST_A]",
-                "B": "[TEST_B]",
-                "LB+Left": "[TEST_LB_Left]",
-                "RB+Right": "[TEST_RB_Right]",
-                "LB+RB+A": "[TEST_LB_RB_A]",
-            },
-        )
-    )
-    for _ in range(10000):
-        ctrl_data = joystick_ctrl.get_data()
-        ctrl_data, commands = joystick_ctrl.process_triggers(ctrl_data)
-        print(ctrl_data)
-        print(commands)
-        print("================================")
-        time.sleep(0.3)
-    exit()

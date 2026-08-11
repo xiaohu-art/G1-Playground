@@ -1,6 +1,6 @@
 from robojudo.config import ASSETS_DIR
 from robojudo.environment.env_cfgs import EnvCfg
-from robojudo.tools.tool_cfgs import DoFConfig, ForwardKinematicCfg
+from robojudo.tools.tool_cfgs import DoFConfig
 
 
 class G1_29DoF(DoFConfig):
@@ -113,106 +113,6 @@ class G1_29DoF(DoFConfig):
     ]
 
 
-class G1_23DoF(G1_29DoF):
-    # num_dofs as 23
-    _subset: bool = True  # if True, simplely inheritance & pick
-
-    _subset_joint_names: list[str] | None = [
-        *[
-            "left_hip_pitch_joint",
-            "left_hip_roll_joint",
-            "left_hip_yaw_joint",
-            "left_knee_joint",
-            "left_ankle_pitch_joint",
-            "left_ankle_roll_joint",
-        ],
-        *[
-            "right_hip_pitch_joint",
-            "right_hip_roll_joint",
-            "right_hip_yaw_joint",
-            "right_knee_joint",
-            "right_ankle_pitch_joint",
-            "right_ankle_roll_joint",
-        ],
-        *["waist_yaw_joint"],
-        *[
-            "left_shoulder_pitch_joint",
-            "left_shoulder_roll_joint",
-            "left_shoulder_yaw_joint",
-            "left_elbow_joint",
-            "left_wrist_roll_joint",
-        ],
-        *[
-            "right_shoulder_pitch_joint",
-            "right_shoulder_roll_joint",
-            "right_shoulder_yaw_joint",
-            "right_elbow_joint",
-            "right_wrist_roll_joint",
-        ],
-    ]
-
-
-class G1_12DoF(G1_29DoF):
-    # num_dofs as 12
-    _subset: bool = True  # if True, simplely inheritance & pick
-
-    _subset_joint_names: list[str] | None = [
-        *[
-            "left_hip_pitch_joint",
-            "left_hip_roll_joint",
-            "left_hip_yaw_joint",
-            "left_knee_joint",
-            "left_ankle_pitch_joint",
-            "left_ankle_roll_joint",
-        ],
-        *[
-            "right_hip_pitch_joint",
-            "right_hip_roll_joint",
-            "right_hip_yaw_joint",
-            "right_knee_joint",
-            "right_ankle_pitch_joint",
-            "right_ankle_roll_joint",
-        ],
-    ]
-
-
 class G1EnvCfg(EnvCfg):
     xml: str = (ASSETS_DIR / "robots/g1/g1_29dof_rev_1_0.xml").as_posix()
-
     dof: DoFConfig = G1_29DoF()
-
-    forward_kinematic: ForwardKinematicCfg | None = ForwardKinematicCfg(
-        xml_path=xml,
-        debug_viz=False,
-        kinematic_joint_names=dof.joint_names,
-    )
-    update_with_fk: bool = True
-    torso_name: str = "torso_link"
-
-
-class G1_23EnvCfg(EnvCfg):
-    xml: str = (ASSETS_DIR / "robots/g1/g1_23dof_rev_1_0.xml").as_posix()
-
-    dof: DoFConfig = G1_23DoF()
-
-    forward_kinematic: ForwardKinematicCfg | None = ForwardKinematicCfg(
-        xml_path=xml,
-        debug_viz=False,
-        kinematic_joint_names=dof.joint_names,
-    )
-    update_with_fk: bool = True
-    torso_name: str = "torso_link"
-
-
-class G1_12EnvCfg(EnvCfg):
-    xml: str = (ASSETS_DIR / "robots/g1/g1_12dof.xml").as_posix()
-
-    dof: DoFConfig = G1_12DoF()
-
-    forward_kinematic: ForwardKinematicCfg | None = ForwardKinematicCfg(
-        xml_path=xml,
-        debug_viz=False,
-        kinematic_joint_names=dof.joint_names,
-    )
-    update_with_fk: bool = False
-    torso_name: str = "pelvis"  # no torso in 12dof model

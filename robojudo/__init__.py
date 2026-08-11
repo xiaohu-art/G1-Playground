@@ -8,7 +8,6 @@ if platform.machine().startswith("aarch64"):
 # Fix libgomp issue on ARM platform (Jetson)
 import torch  # noqa: F401, I001
 import numpy  # noqa: F401, I001
-import scipy.spatial.transform.rotation  # noqa: F401, I001
 
 # load all packages
 import robojudo.config  # ensure configs are registered first  # noqa: E402, F401, I001

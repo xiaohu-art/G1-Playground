@@ -127,8 +127,5 @@ profile_output*
 # Project-specific files
 .vscode
 *.wbproj
-assets/motions
-.gr1t2.jpg
 logs
 MUJOCO_LOG.TXT
-assets/resources
