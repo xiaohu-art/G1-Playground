@@ -37,8 +37,9 @@ Both controllers provide an `axes` mapping and a list of button events. A repres
 - `RightX`: yaw rate
 - `A`: emit `[SHUTDOWN]`
 
-Stick values are normalized to `[-1, 1]` before the policy remaps them to configured velocity limits. Start every run with
-the sticks released.
+The local path expects SDL/pygame to provide stick values in `[-1, 1]`; it applies configured inversion and rounding but no
+general clamp. The Unitree path likewise expects the wireless-remote protocol to provide values in that range. The policy
+then remaps axes to configured velocity limits. Start every run with the sticks released.
 
 ## JoystickCtrl
 
@@ -63,7 +64,7 @@ only by `g1_real`; it does not open a separate desktop controller device.
 python scripts/run_pipeline.py -c g1_real
 ```
 
-> [!DANGER]
+> [!CAUTION]
 > `A` is a software shutdown path. Test it with the robot secured and at zero command before any locomotion test, but never
 > treat it as the only emergency stop. A trained operator must continuously hold the independent hardware emergency stop
 > and keep the operating area clear.

@@ -10,6 +10,7 @@ void bind_UnitreeConfig(py::module_& m) {
     py::class_<UnitreeConfig>(m, "UnitreeConfig")
         .def(py::init<>())
         .def_readwrite("net_if", &UnitreeConfig::net_if)
+        .def_readwrite("domain_id", &UnitreeConfig::domain_id)
         .def_readwrite("control_dt", &UnitreeConfig::control_dt)
         .def_readwrite("msg_type", &UnitreeConfig::msg_type)
         .def_readwrite("control_mode", &UnitreeConfig::control_mode)
@@ -69,6 +70,7 @@ void bind_UnitreeController(py::module_& m) {
             UnitreeConfig cfg;
 
             cfg.net_if = cfg_dict["net_if"].cast<std::string>();
+            cfg.domain_id = cfg_dict["domain_id"].cast<std::int32_t>();
             cfg.control_dt = cfg_dict["control_dt"].cast<double>();
             cfg.msg_type = cfg_dict["msg_type"].cast<std::string>();
             cfg.hand_type = cfg_dict["hand_type"].cast<std::string>();

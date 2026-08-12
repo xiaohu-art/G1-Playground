@@ -8,6 +8,7 @@ class Config(BaseModel):
 
 class UnitreeConfig(Config):
     net_if: str = "eth0"
+    domain_id: int = 0
     control_dt: float = 0.02
 
     msg_type: str = "hg"    # "hg" or "go"

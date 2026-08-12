@@ -7,10 +7,14 @@
 #include <cmath>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -130,8 +134,55 @@ enum class ControlMode {
     TORQUE = 2
 };
 
+namespace unitree_cpp_detail {
+
+struct DdsEndpoint {
+    std::int32_t domain_id;
+    std::string net_if;
+
+    bool operator==(const DdsEndpoint& rhs) const noexcept {
+        return domain_id == rhs.domain_id && net_if == rhs.net_if;
+    }
+};
+
+class DdsEndpointInitGuard {
+   public:
+    template <class Initializer>
+    bool InitializeOnce(std::int32_t domain_id, const std::string& net_if, Initializer&& initializer) {
+        if (domain_id < 0) {
+            throw std::invalid_argument("DDS domain_id must be non-negative");
+        }
+        if (net_if.empty()) {
+            throw std::invalid_argument("DDS net_if must not be empty");
+        }
+
+        DdsEndpoint requested{domain_id, net_if};
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (endpoint_) {
+            if (*endpoint_ == requested) {
+                return false;
+            }
+            throw std::runtime_error(
+                "DDS ChannelFactory endpoint conflict: initialized domain " + std::to_string(endpoint_->domain_id) +
+                " on '" + endpoint_->net_if + "', requested domain " + std::to_string(requested.domain_id) +
+                " on '" + requested.net_if + "'");
+        }
+
+        std::forward<Initializer>(initializer)(requested.domain_id, requested.net_if);
+        endpoint_.emplace(std::move(requested));
+        return true;
+    }
+
+   private:
+    std::mutex mutex_;
+    std::optional<DdsEndpoint> endpoint_;
+};
+
+}  // namespace unitree_cpp_detail
+
 struct UnitreeConfig {
     std::string net_if;
+    std::int32_t domain_id = 0;
     double control_dt;
 
     std::string msg_type;      // "hg" or "go"

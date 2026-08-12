@@ -22,7 +22,9 @@ class g1_real(g1):
     """Unitree G1 29DoF locomotion on real hardware."""
 
     env: G1RealEnvCfg = G1RealEnvCfg(
+        target="hardware",
         unitree=G1UnitreeCfg(
+            domain_id=0,
             net_if="enP8p1s0",
         ),
     )

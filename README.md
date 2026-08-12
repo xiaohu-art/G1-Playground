@@ -2,8 +2,8 @@
 
 RoboJuDo is a focused deployment runtime for the **Unitree G1 29DoF** and the
 `UnitreeWoGaitPolicy` locomotion checkpoint from
-[unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab). The same policy runs in MuJoCo and on a real G1;
-only the controller and environment change.
+[unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab). The checkpoint and policy contract stay identical in
+MuJoCo and on a real G1; input, execution backend, startup lifecycle, and safety configuration differ.
 
 | Configuration | Controller | Environment | Policy |
 | --- | --- | --- | --- |
@@ -51,7 +51,7 @@ runtime contract.
 
 ## Run on a Real G1
 
-> [!DANGER]
+> [!CAUTION]
 > A learned policy can fall, accelerate unexpectedly, or command damaging joint motion. Validate the exact checkpoint,
 > configuration, and robot model in MuJoCo first. Clear the operating area, use an approved support arrangement, keep a
 > trained operator at an independent hardware emergency stop, and begin with zero velocity commands. Never deploy near
@@ -86,6 +86,7 @@ stop throughout the run; press `A` for software shutdown at the first sign of in
 
 ## Documentation
 
+- [Sim2Sim / Sim2Real deployment architecture](docs/architecture.md)
 - [Policy contract](docs/policy.md)
 - [Controller mappings](docs/controller.md)
 - [Environment contract](docs/environment.md)

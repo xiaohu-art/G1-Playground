@@ -4,7 +4,7 @@ The `g1_real` configuration deploys `UnitreeWoGaitPolicy` through `UnitreeCtrl` 
 [Unitree SDK2](https://github.com/unitreerobotics/unitree_sdk2) and the
 [UnitreeCpp](https://github.com/HansZ8/unitree_cpp) Python binding.
 
-> [!DANGER]
+> [!CAUTION]
 > Starting `g1_real` can command all 29 joints during preparation. Complete the MuJoCo test first, clear the robot's full
 > fall and reach envelope, use an approved support arrangement, and assign a trained operator to the independent hardware
 > emergency stop. Do not perform the first test around people, animals, stairs, glass, or unsecured equipment.
@@ -13,6 +13,10 @@ The `g1_real` configuration deploys `UnitreeWoGaitPolicy` through `UnitreeCtrl` 
 > The remote's `A` button is a software shutdown path, not a certified emergency stop. A process failure, network fault,
 > or controller fault can make it unavailable. Keep the hardware emergency stop ready at all times and leave
 > `do_safety_check=True` in `g1_real`.
+
+> [!WARNING]
+> The current real-robot path does not clamp position targets with `position_limits` and does not use `torque_limits`.
+> Those values are not a hardware safety barrier; torque clipping is implemented only in MuJoCo.
 
 ## 1. Install the SDK
 
@@ -51,11 +55,17 @@ Set `net_if` in [`g1_cfg.py`](../robojudo/config/g1/g1_cfg.py):
 ```python
 class g1_real(g1):
     env: G1RealEnvCfg = G1RealEnvCfg(
-        unitree=G1UnitreeCfg(net_if="eth0"),  # replace with the robot-facing interface
+        target="hardware",
+        unitree=G1UnitreeCfg(
+            domain_id=0,
+            net_if="eth0",  # replace with the robot-facing interface
+        ),
     )
 ```
 
-Use a dedicated, stable connection. Do not start actuation until Unitree SDK2 can receive state reliably on that interface.
+The real profile rejects Domain 1 and `lo`; the simulation DDS profile is reserved for Domain 1 on `lo`. Configuration
+validation does not prove that the named interface exists, so confirm it with the commands above. Use a dedicated, stable
+connection. Do not start actuation until Unitree SDK2 can receive state reliably on that interface.
 
 ## 3. Complete the Preflight
 

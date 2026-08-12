@@ -25,10 +25,11 @@ Each control frame contributes 96 observation values:
 | Velocity command | 3 | Forward, lateral, and yaw commands |
 | Joint position error | 29 | Current position minus the policy default pose |
 | Joint velocity | 29 | Scaled joint velocity |
-| Previous action | 29 | Previous normalized policy output |
+| Previous action | 29 | Previous output after optional beta smoothing, before clipping and action scaling |
 
-The policy stores five frames, producing a 480-value model input. The TorchScript model returns 29 actions. After action
-scaling, the pipeline adds the policy default pose to form joint position targets.
+The policy stores five samples of each field, producing a 480-value model input. Packing is field-major—not five adjacent
+96-value frames: `ang_vel[5] | gravity[5] | commands[5] | dof_pos[5] | dof_vel[5] | actions[5]`. The TorchScript model
+returns 29 actions. After action scaling, the pipeline adds the policy default pose to form joint position targets.
 
 The policy and environment may list joints in different orders, but both lists must contain the same 29 G1 joints. The
 pipeline adapter is used only to reorder values; missing or uncontrolled joints are not supported.

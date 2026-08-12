@@ -5,6 +5,17 @@
 
 using std::size_t;
 
+namespace {
+
+bool InitChannelFactoryOnce(const UnitreeConfig& cfg) {
+    static unitree_cpp_detail::DdsEndpointInitGuard guard;
+    return guard.InitializeOnce(cfg.domain_id, cfg.net_if, [](std::int32_t domain_id, const std::string& net_if) {
+        ChannelFactory::Instance()->Init(domain_id, net_if);
+    });
+}
+
+}  // namespace
+
 inline uint32_t Crc32Core(uint32_t* ptr, uint32_t len) {
     uint32_t xbit = 0;
     uint32_t data = 0;
@@ -42,10 +53,11 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
     } else {
         throw std::runtime_error("Unsupported hand type: " + cfg.hand_type);
     }
-    std::cout << cfg.hand_type << " hand with " << num_dofs_hand_ << " DOFs." << std::endl;
 
-    ChannelFactory::Instance()->Init(0, cfg_.net_if);
-    std::cout << "UnitreeController initialized with network interface: " << cfg_.net_if << std::endl;
+    const bool initialized_endpoint = InitChannelFactoryOnce(cfg_);
+    std::cout << cfg.hand_type << " hand with " << num_dofs_hand_ << " DOFs." << std::endl;
+    std::cout << "UnitreeController " << (initialized_endpoint ? "initialized" : "reused") << " DDS domain " << cfg_.domain_id
+              << " on network interface: " << cfg_.net_if << std::endl;
 
     // try to shutdown motion control-related service
     msc_ = std::make_shared<unitree::robot::b2::MotionSwitcherClient>();
@@ -343,6 +355,7 @@ int main(int argc, char const* argv[]) {
     // Example usage of UnitreeController
     UnitreeConfig config;
     config.net_if = "enp13s0";
+    config.domain_id = 0;
     config.control_dt = 0.1;
     config.msg_type = "hg";
     config.control_mode = ControlMode::POSITION;

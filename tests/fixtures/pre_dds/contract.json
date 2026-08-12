@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "source": {
+    "commit": "9f8bde4fb86c4168b92df14223871e5b2f3e4a85",
+    "description": "Runtime baseline before DDS migration"
+  },
+  "composition": {
+    "g1": {
+      "pipeline_type": "RlPipeline",
+      "env_type": "MujocoEnv",
+      "is_sim": true,
+      "controllers": [{"type": "JoystickCtrl", "triggers": {"A": "[SHUTDOWN]"}}],
+      "policy_type": "UnitreeWoGaitPolicy",
+      "device": "cpu",
+      "run_fullspeed": false,
+      "do_safety_check": false
+    },
+    "g1_real": {
+      "pipeline_type": "RlPipeline",
+      "env_type": "UnitreeCppEnv",
+      "is_sim": false,
+      "controllers": [{"type": "UnitreeCtrl", "triggers": {"A": "[SHUTDOWN]"}}],
+      "policy_type": "UnitreeWoGaitPolicy",
+      "device": "cpu",
+      "run_fullspeed": false,
+      "do_safety_check": true
+    }
+  },
+  "loop": {
+    "policy_hz": 50,
+    "control_dt": 0.02,
+    "sim_dt": 0.001,
+    "sim_decimation": 20,
+    "sim_duration_configured": 60.0,
+    "visualize_extras": true
+  },
+  "wire": {
+    "robot": "g1",
+    "msg_type": "hg",
+    "control_mode": "position",
+    "lowcmd_topic": "rt/lowcmd",
+    "lowstate_topic": "rt/lowstate",
+    "control_dt": 0.02,
+    "joint2motor_idx": null,
+    "sdk_motor_order_status": "identity_assumption",
+    "domain_id_effective": 0,
+    "domain_source": "cpp_hardcoded",
+    "net_if": "<machine-specific-redacted>",
+    "non_loopback_required": true
+  },
+  "unitree_binding": {
+    "act_enabled": true,
+    "constructor_dict": {
+      "net_if": "<machine-specific-redacted>",
+      "robot": "g1",
+      "msg_type": "hg",
+      "control_mode": "position",
+      "hand_type": "NONE",
+      "lowcmd_topic": "rt/lowcmd",
+      "lowstate_topic": "rt/lowstate",
+      "enable_odometry": false,
+      "sport_state_topic": "rt/odommodestate",
+      "control_dt": 0.02,
+      "num_dofs": 29,
+      "stiffness": [
+        100, 100, 100, 150, 40, 40, 100, 100, 100, 150, 40, 40, 200, 200, 200, 40, 40, 40, 40, 20,
+        20, 20, 40, 40, 40, 40, 20, 20, 20
+      ],
+      "damping": [
+        5, 5, 5, 5, 2, 2, 5, 5, 5, 5, 2, 2, 6, 6, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2
+      ]
+    },
+    "cpp_consumed_keys": [
+      "net_if",
+      "control_dt",
+      "msg_type",
+      "hand_type",
+      "lowcmd_topic",
+      "lowstate_topic",
+      "sport_state_topic",
+      "enable_odometry",
+      "stiffness",
+      "damping",
+      "num_dofs",
+      "control_mode"
+    ],
+    "post_construct_gain_source": "effective_control_env_order"
+  },
+  "joints": {
+    "environment_order": [
+      "left_hip_pitch_joint",
+      "left_hip_roll_joint",
+      "left_hip_yaw_joint",
+      "left_knee_joint",
+      "left_ankle_pitch_joint",
+      "left_ankle_roll_joint",
+      "right_hip_pitch_joint",
+      "right_hip_roll_joint",
+      "right_hip_yaw_joint",
+      "right_knee_joint",
+      "right_ankle_pitch_joint",
+      "right_ankle_roll_joint",
+      "waist_yaw_joint",
+      "waist_roll_joint",
+      "waist_pitch_joint",
+      "left_shoulder_pitch_joint",
+      "left_shoulder_roll_joint",
+      "left_shoulder_yaw_joint",
+      "left_elbow_joint",
+      "left_wrist_roll_joint",
+      "left_wrist_pitch_joint",
+      "left_wrist_yaw_joint",
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint",
+      "right_wrist_roll_joint",
+      "right_wrist_pitch_joint",
+      "right_wrist_yaw_joint"
+    ],
+    "policy_order": [
+      "left_hip_pitch_joint",
+      "right_hip_pitch_joint",
+      "waist_yaw_joint",
+      "left_hip_roll_joint",
+      "right_hip_roll_joint",
+      "waist_roll_joint",
+      "left_hip_yaw_joint",
+      "right_hip_yaw_joint",
+      "waist_pitch_joint",
+      "left_knee_joint",
+      "right_knee_joint",
+      "left_shoulder_pitch_joint",
+      "right_shoulder_pitch_joint",
+      "left_ankle_pitch_joint",
+      "right_ankle_pitch_joint",
+      "left_shoulder_roll_joint",
+      "right_shoulder_roll_joint",
+      "left_ankle_roll_joint",
+      "right_ankle_roll_joint",
+      "left_shoulder_yaw_joint",
+      "right_shoulder_yaw_joint",
+      "left_elbow_joint",
+      "right_elbow_joint",
+      "left_wrist_roll_joint",
+      "right_wrist_roll_joint",
+      "left_wrist_pitch_joint",
+      "right_wrist_pitch_joint",
+      "left_wrist_yaw_joint",
+      "right_wrist_yaw_joint"
+    ],
+    "xml_actuator_order": [
+      "left_hip_pitch_joint",
+      "left_hip_roll_joint",
+      "left_hip_yaw_joint",
+      "left_knee_joint",
+      "left_ankle_pitch_joint",
+      "left_ankle_roll_joint",
+      "right_hip_pitch_joint",
+      "right_hip_roll_joint",
+      "right_hip_yaw_joint",
+      "right_knee_joint",
+      "right_ankle_pitch_joint",
+      "right_ankle_roll_joint",
+      "waist_yaw_joint",
+      "waist_roll_joint",
+      "waist_pitch_joint",
+      "left_shoulder_pitch_joint",
+      "left_shoulder_roll_joint",
+      "left_shoulder_yaw_joint",
+      "left_elbow_joint",
+      "left_wrist_roll_joint",
+      "left_wrist_pitch_joint",
+      "left_wrist_yaw_joint",
+      "right_shoulder_pitch_joint",
+      "right_shoulder_roll_joint",
+      "right_shoulder_yaw_joint",
+      "right_elbow_joint",
+      "right_wrist_roll_joint",
+      "right_wrist_pitch_joint",
+      "right_wrist_yaw_joint"
+    ],
+    "env_to_policy_target_indices": [
+      0, 3, 6, 9, 13, 17, 1, 4, 7, 10, 14, 18, 2, 5, 8, 11, 15, 19, 21, 23, 25, 27, 12, 16, 20, 22,
+      24, 26, 28
+    ],
+    "policy_to_env_target_indices": [
+      0, 6, 12, 1, 7, 13, 2, 8, 14, 3, 9, 15, 22, 4, 10, 16, 23, 5, 11, 17, 24, 18, 25, 19, 26, 20,
+      27, 21, 28
+    ]
+  },
+  "effective_control_env_order": {
+    "default_pos": [
+      -0.1, 0.0, 0.0, 0.3, -0.2, 0.0, -0.1, 0.0, 0.0, 0.3, -0.2, 0.0, 0.0, 0.0, 0.0, 0.3, 0.25,
+      0.0, 0.97, 0.15, 0.0, 0.0, 0.3, -0.25, 0.0, 0.97, -0.15, 0.0, 0.0
+    ],
+    "stiffness": [
+      100.0, 100.0, 100.0, 150.0, 40.0, 40.0, 100.0, 100.0, 100.0, 150.0, 40.0, 40.0, 200.0, 40.0,
+      40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0, 40.0
+    ],
+    "damping": [
+      2.0, 2.0, 2.0, 4.0, 2.0, 2.0, 2.0, 2.0, 2.0, 4.0, 2.0, 2.0, 5.0, 5.0, 5.0, 10.0, 10.0, 10.0,
+      10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0, 10.0
+    ],
+    "torque_limits": [
+      200.0, 200.0, 200.0, 300.0, 40.0, 40.0, 200.0, 200.0, 200.0, 300.0, 40.0, 40.0, 200.0, 200.0,
+      200.0, 40.0, 40.0, 18.0, 18.0, 10.0, 10.0, 10.0, 40.0, 40.0, 18.0, 18.0, 10.0, 10.0, 10.0
+    ],
+    "position_limits": [
+      [-2.5307, 2.8798],
+      [-0.5236, 2.9671],
+      [-2.7576, 2.7576],
+      [-0.087267, 2.8798],
+      [-0.87267, 0.5236],
+      [-0.2618, 0.2618],
+      [-2.5307, 2.8798],
+      [-2.9671, 0.5236],
+      [-2.7576, 2.7576],
+      [-0.087267, 2.8798],
+      [-0.87267, 0.5236],
+      [-0.2618, 0.2618],
+      [-2.618, 2.618],
+      [-0.52, 0.52],
+      [-0.52, 0.52],
+      [-3.0892, 2.6704],
+      [-1.5882, 2.2515],
+      [-2.618, 2.618],
+      [-1.0472, 2.0944],
+      [-1.972222054, 1.972222054],
+      [-1.614429558, 1.614429558],
+      [-1.614429558, 1.614429558],
+      [-3.0892, 2.6704],
+      [-2.2515, 1.5882],
+      [-2.618, 2.618],
+      [-1.0472, 2.0944],
+      [-1.972222054, 1.972222054],
+      [-1.614429558, 1.614429558],
+      [-1.614429558, 1.614429558]
+    ]
+  },
+  "policy": {
+    "history_length": 5,
+    "history_fields": [
+      ["ang_vel", 3],
+      ["gravity", 3],
+      ["commands", 3],
+      ["dof_pos", 29],
+      ["dof_vel", 29],
+      ["actions", 29]
+    ],
+    "packing": "field-major",
+    "single_sample_size": 96,
+    "input_size": 480,
+    "output_size": 29,
+    "action_scale": 0.25,
+    "action_beta": 1.0,
+    "action_clip": null,
+    "obs_scales": {
+      "ang_vel": 0.2,
+      "gravity": 1.0,
+      "dof_pos": 1.0,
+      "dof_vel": 0.05,
+      "command": [1.0, 1.0, 1.0]
+    },
+    "max_cmd": [0.8, 0.5, 1.57],
+    "commands_map": [
+      [-1.0, 0.0, 1.0],
+      [1.0, 0.0, -1.0],
+      [1.0, 0.0, -1.0]
+    ],
+    "golden_axes": {"LeftX": -0.25, "LeftY": 0.5, "RightX": 0.75},
+    "golden_commands": [0.5, 0.25, -0.75],
+    "golden_scaled_commands": [0.4, 0.125, -1.1775],
+    "golden_input": {
+      "kind": "torch.linspace",
+      "start": -1.0,
+      "end": 1.0,
+      "steps": 480
+    },
+    "golden_output": [
+      -1.38491857, -1.63571107, 0.11856295, 0.53862286, -0.15635026, -0.0378838, -0.03784167,
+      0.12681676, 1.68421233, 0.52464628, 0.98950285, 0.98187792, -0.69512486, -0.97916192,
+      -1.19855833, 0.47738639, 0.80250412, 0.12017628, 0.56471634, 1.64556861, 1.20163536, 1.70201063,
+      0.58003157, 0.92512965, 0.93918335, 0.72259957, 0.73746538, 0.08640452, -0.01954287
+    ]
+  },
+  "assets": {
+    "checkpoint": {
+      "path": "assets/models/g1/unitree/policy_wo_gait.pt",
+      "bytes": 1669152,
+      "sha256": "b5861e91bba86cdb35dc10de9764e26336042c817e179ddcebc3427828677414"
+    },
+    "xml": {
+      "path": "assets/robots/g1/g1_29dof_rev_1_0.xml",
+      "bytes": 26005,
+      "sha256": "3d06ea42dc1fe4913481de24315c5d50539fbecb5833f284d40234c5c8654465"
+    },
+    "closure": {
+      "file_count": 37,
+      "total_bytes": 21361597,
+      "sha256": "d48420d284522462ab662ea9b405937494e9dee0f6b5efd9782865231c07f406"
+    }
+  },
+  "vendors": {
+    "mujoco_viewer": {
+      "revision": "31af945ef640d276a3bafe5e9b858d80c46c8509",
+      "license": "BSD-2-Clause",
+      "closure": {
+        "file_count": 14,
+        "total_bytes": 52627,
+        "sha256": "cd06c5cb7e6121aaf3eec1c78260ae30eb9e2d8b1a4f7ce5066e9f9bdb132d36"
+      }
+    },
+    "unitree_cpp": {
+      "revision": "222028cdaa79cdd7c7cda6645ebd2b02d201be0c",
+      "license": "CC-BY-4.0",
+      "closure": {
+        "file_count": 14,
+        "total_bytes": 44856,
+        "sha256": "372b53247eff7659a3139fbdd18e740b79d482dfd1369d1d1209e5a8847a1eec"
+      }
+    }
+  },
+  "mujoco": {
+    "nq": 36,
+    "nv": 35,
+    "nu": 29,
+    "nbody": 31,
+    "njnt": 30,
+    "nsensor": 4,
+    "nsensordata": 12,
+    "nkey": 0,
+    "xml_timestep": 0.002,
+    "runtime_timestep": 0.001,
+    "qpos_joint_start": 7,
+    "qvel_joint_start": 6,
+    "sensors": [
+      {"name": "imu-torso-angular-velocity", "dim": 3, "adr": 0},
+      {"name": "imu-torso-linear-acceleration", "dim": 3, "adr": 3},
+      {"name": "imu-pelvis-angular-velocity", "dim": 3, "adr": 6},
+      {"name": "imu-pelvis-linear-acceleration", "dim": 3, "adr": 9}
+    ]
+  },
+  "pd_golden": {
+    "q_offset_linspace": [-0.02, 0.02, 29],
+    "dq_linspace": [0.1, -0.1, 29],
+    "target_offset_linspace": [3.0, -3.0, 29],
+    "raw_torque": [
+      301.8, 280.2428571429, 258.6857142857, 355.6142857143, 86.1428571429, 77.5285714286,
+      172.4571428571, 150.9, 129.3428571429, 161.6428571429, 34.4571428571, 25.8428571429,
+      86.2142857143, 8.5928571429, 0.0, -8.5571428571, -17.1142857143, -25.6714285714,
+      -34.2285714286, -42.7857142857, -51.3428571429, -59.9, -68.4571428571, -77.0142857143,
+      -85.5714285714, -94.1285714286, -102.6857142857, -111.2428571429, -119.8
+    ],
+    "clipped_torque": [
+      200.0, 200.0, 200.0, 300.0, 40.0, 40.0, 172.4571428571, 150.9, 129.3428571429,
+      161.6428571429, 34.4571428571, 25.8428571429, 86.2142857143, 8.5928571429, 0.0,
+      -8.5571428571, -17.1142857143, -18.0, -18.0, -10.0, -10.0, -10.0, -40.0, -40.0,
+      -18.0, -18.0, -10.0, -10.0, -10.0
+    ],
+    "saturation_mask": [
+      true, true, true, true, true, true, false, false, false, false, false, false, false, false, false,
+      false, false, true, true, true, true, true, true, true, true, true, true, true, true
+    ],
+    "next_q": [
+      -0.1180312084, -0.0150617718, -0.0098953734, 0.2860469824, -0.2119851506, -0.0090656647,
+      -0.1106621895, -0.0063998027, -0.0009901305, 0.2956419812, -0.2035043845, -0.0018981742,
+      -0.0004863946, -0.0004901646, 0.0026821372, 0.300427947, 0.25291109, 0.0031686145,
+      0.9749454487, 0.1561312986, 0.0085336292, 0.0096300817, 0.3111631124, -0.2371876236,
+      0.0131429208, 0.9848517626, -0.1339030072, 0.0182919877, 0.0196264988
+    ],
+    "next_dq": [
+      1.9687916349, 3.5096567314, 7.2474837674, 1.7612681414, 2.3005636876, 3.7914781641,
+      0.7663819692, 3.6001973412, 7.5812980728, 2.7848383606, 2.2099011689, 2.3875400648,
+      2.3707482244, 0.9384068255, 2.6821372386, -1.0006244487, 0.0539471276, -1.117099745,
+      -0.7688370629, -1.0115585339, -0.0377994002, -0.3699182816, -0.2654590025,
+      -0.0447664232, -1.1427934933, -0.8625231409, -1.0458643075, -0.2794408812,
+      -0.3735012436
+    ]
+  }
+}

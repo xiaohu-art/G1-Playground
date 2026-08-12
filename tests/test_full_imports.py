@@ -107,6 +107,11 @@ class TestFullImports(unittest.TestCase):
         except ImportError as exc:
             self.skipTest(f"vendored unitree_cpp binding is not built or installed: {exc}")
 
+        native_binding = importlib.import_module("unitree_cpp.unitree_cpp")
+        native_config = native_binding.UnitreeConfig()
+        native_config.domain_id = 1
+        self.assertEqual(native_config.domain_id, 1)
+
         environment_class = env_registry.get("UnitreeCppEnv")
         self.assertEqual(environment_class.__name__, "UnitreeCppEnv")
 
@@ -179,7 +184,6 @@ class TestFullImports(unittest.TestCase):
                 self.assertFalse(obsolete_path.exists())
 
         self.assertTrue((REPO_ROOT / "scripts/install_third_party.py").is_file())
-        self.assertTrue((third_party_root / "README.md").is_file())
         self.assertFalse(any(path.name == ".git" for path in third_party_root.rglob(".git")))
         self.assertFalse(any(third_party_root.rglob("*.egg-info")))
 

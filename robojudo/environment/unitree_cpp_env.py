@@ -5,7 +5,7 @@ import numpy as np
 from unitree_cpp import RobotState, UnitreeController  # type: ignore
 
 from robojudo.environment import Environment, env_registry
-from robojudo.environment.env_cfgs import UnitreeCppEnvCfg
+from robojudo.environment.env_cfgs import UnitreeCppEnvCfg, validate_dds_endpoint
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +15,7 @@ class UnitreeCppEnv(Environment):
     cfg_env: UnitreeCppEnvCfg
 
     def __init__(self, cfg_env: UnitreeCppEnvCfg, device: str = "cpu"):
+        validate_dds_endpoint(cfg_env.target, cfg_env.unitree.domain_id, cfg_env.unitree.net_if)
         self.enabled = cfg_env.act
         super().__init__(cfg_env=cfg_env, device=device)
         self.RemoteControllerHandler = None

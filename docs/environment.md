@@ -19,9 +19,10 @@ Both environments expose the same policy inputs:
 - `base_quat`: base orientation in `[x, y, z, w]` order
 - `base_ang_vel`: three-axis base angular velocity
 
-Each call to `step()` receives exactly 29 position targets. The environment configuration supplies the hardware torque
-and position limits; the policy configuration supplies its standing pose and tuned PD gains. Their joint lists must
-contain the same 29 names. A different ordering can be adapted, but partial joint control is rejected.
+Each call to `step()` receives exactly 29 position targets. The policy configuration supplies its standing pose and tuned
+PD gains. The environment configuration declares torque and position limits, but the current runtime only applies torque
+clipping in MuJoCo; the UnitreeCpp path neither clamps position targets with `position_limits` nor uses `torque_limits`.
+Their joint lists must contain the same 29 names. A different ordering can be adapted, but partial joint control is rejected.
 
 ## MujocoEnv
 
@@ -43,12 +44,13 @@ hardware change.
 
 [`unitree_cpp_env.py`](../robojudo/environment/unitree_cpp_env.py) exchanges low-level state and position commands through
 Unitree SDK2 using the [`unitree_cpp`](https://github.com/HansZ8/unitree_cpp) binding. The robot-facing interface is set by
-`net_if` in [`g1_real_env_cfg.py`](../robojudo/config/g1/env/g1_real_env_cfg.py).
+the `g1_real` override in [`g1_cfg.py`](../robojudo/config/g1/g1_cfg.py). Real deployment must explicitly provide the atomic
+`hardware / domain 0 / non-lo interface` endpoint; there is no generic `eth0` fallback.
 
 `UnitreeCppEnv` performs an SDK self-check during startup. Its `shutdown()` method disables further actions and invokes the
 SDK shutdown path. Installation and network preparation are documented in [Unitree G1 setup](unitree_setup.md).
 
-> [!DANGER]
+> [!CAUTION]
 > Passing startup checks does not prove that a checkpoint, joint order, gains, or network link is safe. Keep the hardware
 > emergency stop under direct operator control, keep people outside the robot's fall and reach envelope, and leave
 > `do_safety_check` enabled in `g1_real`.
