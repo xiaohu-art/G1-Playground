@@ -1,7 +1,7 @@
 import time
 import numpy as np
 
-from unitree_cpp import UnitreeController, RobotState, SportState  # type: ignore
+from unitree_cpp import G1DdsControlEndpoint, RobotState, SportState  # type: ignore
 from config import RobotConfig
 
 class UnitreeCppEnv():
@@ -17,7 +17,7 @@ class UnitreeCppEnv():
         cfg_unitree["num_dofs"] = self.num_dofs
         cfg_unitree["stiffness"] = self.stiffness
         cfg_unitree["damping"] = self.damping
-        self.unitree = UnitreeController(cfg_unitree)
+        self.control_endpoint = G1DdsControlEndpoint(cfg_unitree)
 
         self.msg_type = cfg_unitree["msg_type"]
         self.enable_odometry = cfg_unitree["enable_odometry"]
@@ -36,21 +36,21 @@ class UnitreeCppEnv():
 
         if not self.self_check():
             raise RuntimeError("UnitreeCppEnv self check failed")
-        self.unitree.activate_commands()
+        self.control_endpoint.activate_commands()
 
     def self_check(self):
         for _ in range(30):
             time.sleep(0.1)
-            if self.unitree.self_check():
+            if self.control_endpoint.self_check():
                 print("UnitreeCppEnv self check passed!")
                 break
-        if not self.unitree.self_check():
+        if not self.control_endpoint.self_check():
             print("UnitreeCppEnv self check failed!")
             return False
         return True
 
     def update(self):
-        self.robot_state = self.unitree.get_robot_state()
+        self.robot_state = self.control_endpoint.get_robot_state()
 
         if self.msg_type == "hg":
             self._joint_positions = np.asarray(
@@ -76,19 +76,19 @@ class UnitreeCppEnv():
             raise NotImplementedError("msg_type 'go' not implemented in this example.")
         
         if self.enable_odometry:
-            self.sport_state = self.unitree.get_sport_state()
+            self.sport_state = self.control_endpoint.get_sport_state()
             self._base_pos = np.asarray(self.sport_state.position)
             self._imu_linear_velocity = np.asarray(self.sport_state.velocity)
 
     def step(self, pd_target):
         assert len(pd_target) == self.num_dofs, "pd_target len should be num_dofs of env"
-        self.unitree.step(pd_target.tolist())
+        self.control_endpoint.step(pd_target.tolist())
 
     def shutdown(self):
-        self.unitree.shutdown()
+            self.control_endpoint.shutdown()
 
     def set_gains(self, stiffness, damping):
-        self.unitree.set_gains(stiffness, damping)
+        self.control_endpoint.set_gains(stiffness, damping)
 
 
 if __name__ == "__main__":

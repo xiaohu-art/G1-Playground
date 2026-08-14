@@ -3,7 +3,9 @@
 `deployment=real` composes `G1Env + UnitreeCtrl` with Domain 0, the configured robot-facing interface, and
 `motion_switcher_required=true`. `domain_id` is only a DDS endpoint value; the launcher does not use it to recognize
 hardware. DDS simulation and hardware use the same dry frames → preflight → activation → ramp → blend →
-paced-loop lifecycle and the same pre-actuation safety checks.
+paced-loop lifecycle and the same pre-actuation safety checks. `G1Env` uses the native `G1DdsControlEndpoint` to
+communicate directly with the physical G1. The simulation-only `G1DdsRobotEndpoint` is not constructed or required by
+the real profile.
 
 > [!CAUTION]
 > Starting `deployment=real` can command all 29 joints during the shared 3-second standing ramp and 5-second policy
@@ -28,10 +30,12 @@ Use an Ubuntu host or the G1 onboard computer that can reach the robot's SDK2 ne
 2. From the G1-Playground repository root, build the vendored binding:
 
    ```bash
-   python scripts/install_third_party.py unitree_cpp
+   python scripts/setup/install_third_party.py unitree_cpp
    ```
 
    The build needs CMake, a C++17 compiler, pybind11, scikit-build-core, Unitree SDK2, and CycloneDDS development files.
+   It provides the `G1DdsControlEndpoint` used here; its `G1DdsRobotEndpoint` class is only the standalone simulator's
+   opposite DDS endpoint.
 
 3. Verify imports without connecting to hardware:
 
@@ -53,7 +57,7 @@ ip -brief address
 The tracked real profile contains a legacy `enP8p1s0` value. Override it with the interface that actually faces the robot:
 
 ```bash
-python scripts/run_pipeline.py --cfg job --resolve deployment=real env.net_if=ROBOT_NIC
+python scripts/pipeline.py --cfg job --resolve deployment=real env.net_if=ROBOT_NIC
 ```
 
 This command only prints resolved configuration. Confirm Domain 0, the interface name, topics,
@@ -68,8 +72,8 @@ MotionSwitcher requirement as a shortcut.
 
 Before every hardware run:
 
-- Start `python scripts/run_mujoco_dds_server.py`; its viewer is mandatory. In another terminal run
-  `python scripts/run_pipeline.py deployment=sim` with the exact checkout and checkpoint. Verify zero command, x/y/yaw,
+- Start `python scripts/simulate.py`; its viewer is mandatory. In another terminal run
+  `python scripts/pipeline.py deployment=sim` with the exact checkout and checkpoint. Verify zero command, x/y/yaw,
   standing preparation, fail-stop fall handling, `A` shutdown, and clean teardown.
 - Confirm the robot is the supported G1 29DoF model and inspect joints, battery, remote, cables, and support equipment.
 - Verify joint order, starting pose, command directions, policy gains, and expected LowState mode.
@@ -85,12 +89,12 @@ MotionSwitcher is unavailable, or software shutdown has not been verified in a s
 With the robot supported, the exclusion zone clear, and the hardware stop guarded:
 
 ```bash
-python scripts/run_pipeline.py deployment=real env.net_if=ROBOT_NIC
+python scripts/pipeline.py deployment=real env.net_if=ROBOT_NIC
 ```
 
 The exact sequence is:
 
-1. `G1Env` creates receive resources only.
+1. `G1Env` constructs `G1DdsControlEndpoint`, which creates receive resources only.
 2. `self_check()` requires valid state.
 3. 10 dry frames read state/input, check `A` and tilt/fall, and run policy inference without writing.
 4. The launcher performs one more state/input/shutdown/tilt preflight, saves the measured pose, then calls
@@ -115,7 +119,7 @@ safety.
 ## 5. Stop and recovery
 
 For a normal software stop, release the sticks and press `A`. The launcher detects it before the next actuation and reaches
-`G1Env.shutdown()` through `finally`; an activated native client stops its writer, sends a damping command, and
+`G1Env.shutdown()` through `finally`; an activated control endpoint stops its writer, sends a damping command, and
 closes transport. `Ctrl+C` and raised state/command exceptions use the same teardown path.
 
 If the robot does not respond immediately or behaves unexpectedly, use the independent hardware emergency stop. Do not

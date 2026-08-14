@@ -1,5 +1,7 @@
-// src/robot_controller.hpp
+// src/g1_dds_control_endpoint.hpp
 #pragma once
+#include "dds_utils.hpp"
+
 #include <atomic>
 #include <vector>
 #include <map>
@@ -8,7 +10,6 @@
 #include <cmath>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <shared_mutex>
 #include <stdexcept>
 #include <utility>
@@ -21,7 +22,6 @@
 // DDS
 #include <unitree/robot/channel/channel_publisher.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
-#include <unitree/robot/channel/channel_factory.hpp>
 
 // IDL
 #include <unitree/idl/hg/IMUState_.hpp>
@@ -142,77 +142,7 @@ enum class ControlMode {
 
 namespace unitree_cpp_detail {
 
-inline std::uint32_t Crc32Core(const std::uint32_t* words, std::uint32_t length) noexcept {
-    std::uint32_t crc = 0xFFFFFFFF;
-    constexpr std::uint32_t polynomial = 0x04C11DB7;
-    for (std::uint32_t index = 0; index < length; ++index) {
-        std::uint32_t bit = 1U << 31;
-        const std::uint32_t data = words[index];
-        for (std::uint32_t offset = 0; offset < 32; ++offset) {
-            if (crc & 0x80000000) {
-                crc = (crc << 1) ^ polynomial;
-            } else {
-                crc <<= 1;
-            }
-            if (data & bit) {
-                crc ^= polynomial;
-            }
-            bit >>= 1;
-        }
-    }
-    return crc;
-}
-
-struct DdsEndpoint {
-    std::int32_t domain_id;
-    std::string net_if;
-
-    bool operator==(const DdsEndpoint& rhs) const noexcept {
-        return domain_id == rhs.domain_id && net_if == rhs.net_if;
-    }
-};
-
-class DdsEndpointInitGuard {
-   public:
-    template <class Initializer>
-    bool InitializeOnce(std::int32_t domain_id, const std::string& net_if, Initializer&& initializer) {
-        if (domain_id < 0) {
-            throw std::invalid_argument("DDS domain_id must be non-negative");
-        }
-        if (net_if.empty()) {
-            throw std::invalid_argument("DDS net_if must not be empty");
-        }
-
-        DdsEndpoint requested{domain_id, net_if};
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (endpoint_) {
-            if (*endpoint_ == requested) {
-                return false;
-            }
-            throw std::runtime_error(
-                "DDS ChannelFactory endpoint conflict: initialized domain " + std::to_string(endpoint_->domain_id) +
-                " on '" + endpoint_->net_if + "', requested domain " + std::to_string(requested.domain_id) +
-                " on '" + requested.net_if + "'");
-        }
-
-        std::forward<Initializer>(initializer)(requested.domain_id, requested.net_if);
-        endpoint_.emplace(std::move(requested));
-        return true;
-    }
-
-   private:
-    std::mutex mutex_;
-    std::optional<DdsEndpoint> endpoint_;
-};
-
-inline bool InitializeDdsEndpointOnce(std::int32_t domain_id, const std::string& net_if) {
-    static DdsEndpointInitGuard guard;
-    return guard.InitializeOnce(domain_id, net_if, [](std::int32_t selected_domain, const std::string& selected_if) {
-        unitree::robot::ChannelFactory::Instance()->Init(selected_domain, selected_if);
-    });
-}
-
-enum class ControllerState {
+enum class DdsControlEndpointState {
     RECEIVING = 0,
     ACTIVE = 1,
     CLOSED = 2,
@@ -225,11 +155,11 @@ bool IsFreshTimestamp(
     double timeout_seconds);
 
 // Small, DDS-free lifecycle core. The callbacks make the actual side effects
-// injectable in unit tests while keeping one source of truth for controller
+// injectable in unit tests while keeping one source of truth for the control endpoint
 // state in production.
-class ControllerLifecycle {
+class DdsControlEndpointLifecycle {
    public:
-    ControllerState state() const {
+    DdsControlEndpointState state() const {
         std::lock_guard<std::mutex> lock(mutex_);
         return state_;
     }
@@ -237,25 +167,25 @@ class ControllerLifecycle {
     template <class Activator>
     bool ActivateOnce(Activator&& activator) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (state_ == ControllerState::ACTIVE) {
+        if (state_ == DdsControlEndpointState::ACTIVE) {
             return false;
         }
-        if (state_ == ControllerState::CLOSED) {
-            throw std::logic_error("cannot activate a closed UnitreeController");
+        if (state_ == DdsControlEndpointState::CLOSED) {
+            throw std::logic_error("cannot activate a closed G1DdsControlEndpoint");
         }
 
         // Keep RECEIVING if activation throws, so callers may fix the cause and
         // retry without reconstructing the state subscriber.
         std::forward<Activator>(activator)();
-        state_ = ControllerState::ACTIVE;
+        state_ = DdsControlEndpointState::ACTIVE;
         return true;
     }
 
     template <class Operation>
     void RunWhileActive(Operation&& operation) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (state_ != ControllerState::ACTIVE) {
-            throw std::logic_error("UnitreeController command transport is not active");
+        if (state_ != DdsControlEndpointState::ACTIVE) {
+            throw std::logic_error("G1DdsControlEndpoint command transport is not active");
         }
         std::forward<Operation>(operation)();
     }
@@ -263,8 +193,8 @@ class ControllerLifecycle {
     template <class Operation>
     void RunWhileOpen(Operation&& operation) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (state_ == ControllerState::CLOSED) {
-            throw std::logic_error("UnitreeController is closed");
+        if (state_ == DdsControlEndpointState::CLOSED) {
+            throw std::logic_error("G1DdsControlEndpoint is closed");
         }
         std::forward<Operation>(operation)();
     }
@@ -272,24 +202,24 @@ class ControllerLifecycle {
     template <class Closer>
     bool CloseOnce(Closer&& closer) {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (state_ == ControllerState::CLOSED) {
+        if (state_ == DdsControlEndpointState::CLOSED) {
             return false;
         }
 
-        const ControllerState previous_state = state_;
-        state_ = ControllerState::CLOSED;
+        const DdsControlEndpointState previous_state = state_;
+        state_ = DdsControlEndpointState::CLOSED;
         std::forward<Closer>(closer)(previous_state);
         return true;
     }
 
    private:
     mutable std::mutex mutex_;
-    ControllerState state_ = ControllerState::RECEIVING;
+    DdsControlEndpointState state_ = DdsControlEndpointState::RECEIVING;
 };
 
 }  // namespace unitree_cpp_detail
 
-struct UnitreeConfig {
+struct G1DdsControlEndpointConfig {
     std::string net_if;
     std::int32_t domain_id = 0;
     double control_dt;
@@ -310,12 +240,12 @@ struct UnitreeConfig {
     bool motion_switcher_required = true;
 };
 
-class UnitreeController {
+class G1DdsControlEndpoint {
    public:
-    UnitreeController(const UnitreeConfig& cfg);
-    ~UnitreeController();
+    G1DdsControlEndpoint(const G1DdsControlEndpointConfig& cfg);
+    ~G1DdsControlEndpoint();
     bool activate_commands();
-    unitree_cpp_detail::ControllerState lifecycle_state() const;
+    unitree_cpp_detail::DdsControlEndpointState lifecycle_state() const;
     bool self_check();
     void step(const std::vector<double>& actions);
     void step_hands(const std::vector<double>& l_hand_pose, const std::vector<double>& r_hand_pose);
@@ -326,7 +256,7 @@ class UnitreeController {
     SportState get_sport_state();
 
    private:
-    UnitreeConfig cfg_;
+    G1DdsControlEndpointConfig cfg_;
 
     std::vector<double> stiffness_;
     std::vector<double> damping_;
@@ -334,7 +264,7 @@ class UnitreeController {
     unsigned short num_dofs_hand_;
 
     Mode mode_pr_;
-    unitree_cpp_detail::ControllerLifecycle lifecycle_;
+    unitree_cpp_detail::DdsControlEndpointLifecycle lifecycle_;
     std::atomic<std::int64_t> last_command_time_ns_{0};
     std::atomic<bool> command_watchdog_fired_{false};
     std::mutex command_write_mutex_;

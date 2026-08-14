@@ -27,7 +27,7 @@ def cpp_block(source: str, marker: str) -> str:
 
 
 def load_pipeline_launcher():
-    source_path = REPO_ROOT / "scripts/run_pipeline.py"
+    source_path = REPO_ROOT / "scripts/pipeline.py"
     spec = importlib.util.spec_from_file_location("g1_playground_phase4_pipeline_test", source_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load launcher from {source_path}")
@@ -132,8 +132,8 @@ class TestPipelineCommandGate(unittest.TestCase):
 class TestNativeStateHardening(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.header = (UNITREE_CPP_ROOT / "unitree_controller.hpp").read_text()
-        cls.source = (UNITREE_CPP_ROOT / "unitree_controller.cpp").read_text()
+        cls.header = (UNITREE_CPP_ROOT / "g1_dds_control_endpoint.hpp").read_text()
+        cls.source = (UNITREE_CPP_ROOT / "g1_dds_control_endpoint.cpp").read_text()
         cls.binding = (UNITREE_CPP_ROOT / "py_binding.cpp").read_text()
 
     def test_robot_state_owns_mode_and_monotonic_receive_time(self):
@@ -146,7 +146,7 @@ class TestNativeStateHardening(unittest.TestCase):
         )
 
     def test_lowstate_validation_precedes_single_atomic_commit(self):
-        handler = cpp_block(self.source, "void UnitreeController::LowStateHandler")
+        handler = cpp_block(self.source, "void G1DdsControlEndpoint::LowStateHandler")
         validator = cpp_block(self.source, "bool unitree_cpp_detail::IsValidLowStateCandidate")
         commit = "robot_state_buffer_.SetData(robot_state_tmp)"
 
@@ -172,14 +172,21 @@ class TestNativeStateHardening(unittest.TestCase):
                 self.assertIn(required, validator)
 
     def test_state_freshness_uses_one_derived_timeout(self):
-        timeout = cpp_block(self.source, "double ControllerTimeout")
-        validate = cpp_block(self.source, "void UnitreeController::ValidateRobotState")
-        read = cpp_block(self.source, "RobotState UnitreeController::get_robot_state")
+        timeout = cpp_block(self.source, "double ControlEndpointTimeout")
+        validate = cpp_block(self.source, "void G1DdsControlEndpoint::ValidateRobotState")
+        read = cpp_block(self.source, "RobotState G1DdsControlEndpoint::get_robot_state")
 
         self.assertRegex(timeout, r"std::max\(5\.0\s*\*\s*cfg\.control_dt,\s*0\.1\)")
-        self.assertIn("IsFreshTimestamp(state.received_at, SteadyClock::now(), ControllerTimeout(cfg_))", validate)
+        self.assertIn("IsFreshTimestamp(state.received_at, SteadyClock::now(), ControlEndpointTimeout(cfg_))", validate)
         self.assertIn("Low state data is stale", validate)
         self.assertIn("ValidateRobotState(*robot_state)", read)
+
+    def test_native_constructor_owns_control_period_validation(self):
+        constructor = cpp_block(self.source, "G1DdsControlEndpoint::G1DdsControlEndpoint")
+        validation = "!std::isfinite(cfg_.control_dt) || cfg_.control_dt <= 0"
+
+        self.assertIn(validation, constructor)
+        self.assertLess(constructor.index(validation), constructor.index("InitChannelFactoryOnce(cfg_)"))
 
     def test_lowstate_candidate_and_freshness_helpers_without_live_dds(self):
         compiler = shutil.which("clang++") or shutil.which("c++")
@@ -212,7 +219,7 @@ class TestNativeStateHardening(unittest.TestCase):
         if compiler is None or sdk_include is None or dds_include is None or library_dir is None:
             self.skipTest("C++ compiler or Unitree SDK2/CycloneDDS development files are unavailable")
 
-        production_source = (UNITREE_CPP_ROOT / "unitree_controller.cpp").as_posix()
+        production_source = (UNITREE_CPP_ROOT / "g1_dds_control_endpoint.cpp").as_posix()
         source = textwrap.dedent(
             f"""
             #include <cassert>
@@ -220,7 +227,7 @@ class TestNativeStateHardening(unittest.TestCase):
             #include <cstdint>
             #include <limits>
 
-            #define main unitree_controller_example_main
+            #define main g1_dds_control_endpoint_example_main
             #include "{production_source}"
             #undef main
 
@@ -302,20 +309,20 @@ class TestNativeStateHardening(unittest.TestCase):
 class TestNativeCommandHardening(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.source = (UNITREE_CPP_ROOT / "unitree_controller.cpp").read_text()
-        cls.server_source = (UNITREE_CPP_ROOT / "dds_sim_server.cpp").read_text()
+        cls.source = (UNITREE_CPP_ROOT / "g1_dds_control_endpoint.cpp").read_text()
+        cls.robot_endpoint_source = (UNITREE_CPP_ROOT / "g1_dds_robot_endpoint.cpp").read_text()
 
     def test_step_rejects_nonfinite_target_before_buffer_update(self):
-        step = cpp_block(self.source, "void UnitreeController::step(")
+        step = cpp_block(self.source, "void G1DdsControlEndpoint::step(")
         finite_gate = step.index("AllRepresentableAsFloat(actions)")
         update = step.index("WriteMotorCommand(motor_command_tmp)")
         self.assertLess(finite_gate, update)
         self.assertRegex(step[finite_gate:update], r"representable")
 
     def test_periodic_writer_stops_on_stale_state_as_well_as_stale_command(self):
-        writer = cpp_block(self.source, "void UnitreeController::LowCommandWriter")
+        writer = cpp_block(self.source, "void G1DdsControlEndpoint::LowCommandWriter")
         self.assertIn("command_write_mutex_", writer)
-        locked_writer = cpp_block(self.source, "void UnitreeController::LowCommandWriterLocked")
+        locked_writer = cpp_block(self.source, "void G1DdsControlEndpoint::LowCommandWriterLocked")
         self.assertIn("CommandExpired() || !HasFreshRobotState()", locked_writer)
         self.assertLess(
             locked_writer.index("CommandExpired() || !HasFreshRobotState()"),
@@ -323,7 +330,7 @@ class TestNativeCommandHardening(unittest.TestCase):
         )
 
     def test_expired_command_sends_one_damping_frame_then_stops(self):
-        writer = cpp_block(self.source, "void UnitreeController::LowCommandWriterLocked")
+        writer = cpp_block(self.source, "void G1DdsControlEndpoint::LowCommandWriterLocked")
         self.assertIn("if (CommandExpired() || !HasFreshRobotState())", writer)
         self.assertEqual(writer.count("command_watchdog_fired_.exchange(true)"), 1)
         self.assertEqual(writer.count("SendDampingCommand()"), 1)
@@ -333,26 +340,26 @@ class TestNativeCommandHardening(unittest.TestCase):
         self.assertIn("motor_command_buffer_.Clear()", expired_branch)
         self.assertIn("return;", expired_branch)
 
-        step = cpp_block(self.source, "void UnitreeController::step(")
+        step = cpp_block(self.source, "void G1DdsControlEndpoint::step(")
         self.assertIn("command_watchdog_fired_.load()", step)
         self.assertIn("command watchdog expired", step)
 
-        submit = cpp_block(self.source, "void UnitreeController::WriteMotorCommand")
+        submit = cpp_block(self.source, "void G1DdsControlEndpoint::WriteMotorCommand")
         self.assertIn("command_write_mutex_", submit)
         self.assertIn("command_watchdog_fired_.load()", submit)
         self.assertNotIn("command_watchdog_fired_.store(false)", submit)
 
     def test_transport_failures_and_endpoint_initialization_are_not_silent(self):
-        writer = cpp_block(self.source, "void UnitreeController::LowCommandWriterLocked")
-        damping = cpp_block(self.source, "void UnitreeController::SendDampingCommand")
+        writer = cpp_block(self.source, "void G1DdsControlEndpoint::LowCommandWriterLocked")
+        damping = cpp_block(self.source, "void G1DdsControlEndpoint::SendDampingCommand")
         for block in (writer, damping):
             self.assertIn("if (!lowcmd_publisher_->Write", block)
             self.assertRegex(block, r'throw std::runtime_error\("Failed to publish DDS')
-        self.assertIn("InitializeDdsEndpointOnce(cfg_.domain_id, cfg_.net_if)", self.server_source)
-        self.assertNotIn("ChannelFactory::Instance()->Init(cfg_.domain_id", self.server_source)
+        self.assertIn("InitializeDdsEndpointOnce(cfg_.domain_id, cfg_.net_if)", self.robot_endpoint_source)
+        self.assertNotIn("ChannelFactory::Instance()->Init(cfg_.domain_id", self.robot_endpoint_source)
 
     def test_motion_switcher_uses_the_remaining_total_deadline(self):
-        activation = cpp_block(self.source, "void UnitreeController::InitializeCommandTransport")
+        activation = cpp_block(self.source, "void G1DdsControlEndpoint::InitializeCommandTransport")
         self.assertIn("release_deadline", activation)
         self.assertIn("duration<float>(remaining)", activation)
         self.assertLess(activation.index("SetTimeout"), activation.index("CheckMode"))

@@ -3,12 +3,19 @@
 G1-Playground deliberately has one policy-facing environment boundary:
 
 ```text
-Controller -> UnitreeWoGaitPolicy -> G1Env -> HG DDS -+-> physical G1
-                                                      +-> first-party MuJoCo server
+sim:  JoystickCtrl -> UnitreeWoGaitPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS
+                                                                              <-> G1DdsRobotEndpoint
+                                                                                  <-> G1MujocoDdsServer
+                                                                                      <-> G1MujocoBackend
+
+real: UnitreeCtrl  -> UnitreeWoGaitPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS <-> physical G1
 ```
 
 The simulator is a separate DDS peer. `G1Env` never selects a backend or calls MuJoCo, so simulation and hardware run the
-same client lifecycle, state validation, policy inference, pacing, shutdown checks, and LowCmd writer behavior.
+same client lifecycle, state validation, policy inference, pacing, shutdown checks, and LowCmd writer behavior. Both
+profiles construct `unitree_cpp.G1DdsControlEndpoint` inside `G1Env`. Only `scripts/simulate.py` constructs
+`unitree_cpp.G1DdsRobotEndpoint`; the real path talks directly to the physical G1 and does not depend on the simulated
+robot endpoint.
 
 ## Deployment composition
 
@@ -40,7 +47,7 @@ watchdog, and the launcher owns the fixed 60 Hz viewer constant.
 
 ## Composition and runtime contracts
 
-[`scripts/run_pipeline.py`](../scripts/run_pipeline.py) is the only policy composition root:
+[`scripts/pipeline.py`](../scripts/pipeline.py) is the only policy composition root:
 
 ```python
 dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
@@ -92,10 +99,16 @@ The policy's model layout is fixed by class constants: five field-major samples 
 The standalone process has three layers:
 
 ```text
-scripts/run_mujoco_dds_server.py        composition + mandatory viewer
+scripts/simulate.py                     composition + mandatory viewer
     -> G1MujocoDdsServer               DDS/PD/watchdog/pacing
-        -> G1MujocoBackend             locked MuJoCo model/data/support step
+        +-> G1DdsRobotEndpoint         native simulated-robot HG endpoint
+        +-> G1MujocoBackend            locked MuJoCo model/data/support step
 ```
+
+[`G1DdsRobotEndpoint`](../third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp) is deliberately small: it validates and
+snapshots LowCmd, then builds and publishes LowState from simulator snapshots. It knows nothing about MuJoCo, policy
+inference, PD torque, or the viewer. `G1MujocoDdsServer` owns those simulation-side concerns and receives the endpoint as
+a dependency.
 
 The server holds the previous `MujocoState`. A tick obtains one coherent LowCmd, computes and clips PD torque using that
 state, then calls `backend.step(torque, support_scale)` exactly once. Under one lock the backend updates elastic support,
@@ -115,10 +128,23 @@ default timeout terminates the simulator. Torque is clipped only here, using `ro
 
 The public launcher always opens the official MuJoCo viewer. Its main thread copies coherent backend data into separate
 render data; the background server keeps the absolute physics deadline. Viewer input never mutates physics, and teardown
-preserves stop-event, worker join, bridge close, then viewer close behavior. Tests may instantiate the viewer-free lower
-layers directly.
+preserves stop-event, worker join, robot-endpoint close, then viewer close behavior. Tests may instantiate the viewer-free
+lower layers directly.
 
-## Native DDS client boundary
+## Native DDS boundaries
+
+| Native class | Constructed by | DDS role | Deployments |
+| --- | --- | --- | --- |
+| `G1DdsControlEndpoint` | `G1Env` in the policy process | receives LowState; publishes LowCmd after activation | `sim` and `real` |
+| `G1DdsRobotEndpoint` | `scripts/simulate.py` | receives LowCmd; publishes LowState built from MuJoCo snapshots | `sim` only |
+
+The implementations live in
+[`g1_dds_control_endpoint.cpp`](../third_party/unitree_cpp/src/g1_dds_control_endpoint.cpp) and
+[`g1_dds_robot_endpoint.cpp`](../third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp). The physical G1 supplies the
+robot-side DDS endpoint in a real deployment. Consequently, `deployment=real` depends on `G1DdsControlEndpoint`, not the
+simulation-only `G1DdsRobotEndpoint`. The native endpoint classes neither construct nor call each other; both
+independently use the neutral CRC and endpoint guards in
+[`dds_utils.hpp`](../third_party/unitree_cpp/src/dds_utils.hpp).
 
 Construction is receive-only. Native LowState acceptance validates CRC, expected mode, finite motor/IMU values, strictly
 advancing tick with wrap, and freshness. `self_check()` requires a nonzero ready tick. Invalid packets neither overwrite
@@ -137,8 +163,8 @@ stale operation. Shutdown is idempotent.
 - No DDS simulator reset/debug channel exists; a fall stops the policy client and requires process restart.
 - Manual mandatory-viewer behavior checks and an independently guarded hardware emergency stop remain required before a
   real run.
-- Frozen pre-DDS fixtures and Phase 0-5 field names are historical evidence. They must not be rewritten to resemble the
-  current API.
+- Frozen pre-DDS fixtures and Phase 0-5 records are historical evidence. Names such as `G1DdsSimServer` and
+  `dds_sim_server.cpp` describe the API at that time and must not be rewritten to resemble the current API.
 
 See the [G1Env contract](environment.md), [policy contract](policy.md), [controller contract](controller.md), and
 [real-robot setup](unitree_setup.md).

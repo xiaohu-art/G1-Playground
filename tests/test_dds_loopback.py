@@ -31,7 +31,7 @@ def _run_server(ready, stop, results):
 
         robot = OmegaConf.load(REPO_ROOT / "configs/robot/g1.yaml")
         backend = G1MujocoBackend(resolve_repo_path(robot.xml), 0.001, elastic_support_scale=1.0)
-        bridge = native.G1DdsSimServer(
+        bridge = native.G1DdsRobotEndpoint(
             {
                 "domain_id": 1,
                 "net_if": "lo",
@@ -90,7 +90,7 @@ def _run_state_client(domain_id, samples, results):
     controller = None
     try:
         native = _load_native()
-        controller = native.UnitreeController(
+        controller = native.G1DdsControlEndpoint(
             {
                 "domain_id": domain_id,
                 "net_if": "lo",
@@ -152,7 +152,7 @@ def _run_command_client(results):
     controller = None
     try:
         native = _load_native()
-        controller = native.UnitreeController(
+        controller = native.G1DdsControlEndpoint(
             {
                 "domain_id": 1,
                 "net_if": "lo",

@@ -13,7 +13,7 @@
 #include <unitree/robot/channel/channel_publisher.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
 
-struct DdsSimServerConfig {
+struct G1DdsRobotEndpointConfig {
     std::int32_t domain_id = 1;
     std::string net_if = "lo";
     std::string lowcmd_topic = "rt/lowcmd";
@@ -45,21 +45,21 @@ struct DdsLowStateSnapshot {
     std::array<std::uint8_t, 40> wireless_remote = {};
 };
 
-struct DdsSimServerStats {
+struct G1DdsRobotEndpointStats {
     std::uint64_t accepted_commands = 0;
     std::uint64_t crc_errors = 0;
     std::uint64_t finite_errors = 0;
     std::uint64_t mode_errors = 0;
 };
 
-class G1DdsSimServer {
+class G1DdsRobotEndpoint {
    public:
-    explicit G1DdsSimServer(const DdsSimServerConfig& cfg);
-    ~G1DdsSimServer();
+    explicit G1DdsRobotEndpoint(const G1DdsRobotEndpointConfig& cfg);
+    ~G1DdsRobotEndpoint();
 
     DdsCommandSnapshot get_command() const;
     std::uint32_t publish_lowstate(const DdsLowStateSnapshot& snapshot);
-    DdsSimServerStats stats() const;
+    G1DdsRobotEndpointStats stats() const;
     bool close();
 
    private:
@@ -67,10 +67,10 @@ class G1DdsSimServer {
     using LowState = unitree_hg::msg::dds_::LowState_;
     using Clock = std::chrono::steady_clock;
 
-    DdsSimServerConfig cfg_;
+    G1DdsRobotEndpointConfig cfg_;
     mutable std::mutex mutex_;
     DdsCommandSnapshot command_;
-    DdsSimServerStats stats_;
+    G1DdsRobotEndpointStats stats_;
     Clock::time_point last_command_time_{};
     std::uint32_t next_tick_ = 1;
     bool closed_ = false;

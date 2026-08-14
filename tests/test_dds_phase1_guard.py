@@ -39,11 +39,24 @@ class TestDdsEndpointInitGuard(unittest.TestCase):
             #include <thread>
             #include <vector>
 
-            #include "unitree_controller.hpp"
+            #include "dds_utils.hpp"
 
             using unitree_cpp_detail::DdsEndpointInitGuard;
 
             int main() {
+                DdsEndpointInitGuard invalid_guard;
+                int invalid_initializer_calls = 0;
+                bool negative_domain_rejected = false;
+                try {
+                    invalid_guard.InitializeOnce(-1, "lo", [&](std::int32_t, const std::string&) {
+                        ++invalid_initializer_calls;
+                    });
+                } catch (const std::invalid_argument&) {
+                    negative_domain_rejected = true;
+                }
+                assert(negative_domain_rejected);
+                assert(invalid_initializer_calls == 0);
+
                 DdsEndpointInitGuard guard;
                 int calls = 0;
                 const auto initializer = [&calls](std::int32_t domain_id, const std::string& net_if) {

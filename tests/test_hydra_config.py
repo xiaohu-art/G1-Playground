@@ -12,7 +12,7 @@ from omegaconf import OmegaConf
 from tests.config_helpers import CONFIG_DIR, compose_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = REPO_ROOT / "scripts/run_pipeline.py"
+LAUNCHER = REPO_ROOT / "scripts/pipeline.py"
 
 
 class TestHydraConfig(unittest.TestCase):
@@ -170,6 +170,7 @@ class TestHydraConfig(unittest.TestCase):
         function_names = {node.name for node in module.body if isinstance(node, ast.FunctionDef)}
         self.assertNotIn("parse_args", function_names)
         self.assertNotIn("create_components", function_names)
+        self.assertNotIn("main", function_names)
         self.assertIn("g1_playground.utils.math", imported_modules)
         self.assertIn("read_frame", function_names)
         self.assertLessEqual(len(LAUNCHER.read_text().splitlines()), 200)
@@ -203,10 +204,9 @@ class TestHydraConfig(unittest.TestCase):
         self.assertEqual({keyword.arg for keyword in instantiate_calls[0].keywords}, {"control_dt", "dof_cfg"})
         self.assertEqual({keyword.arg for keyword in instantiate_calls[1].keywords}, {"env"})
 
-        main = next(node for node in module.body if isinstance(node, ast.FunctionDef) and node.name == "main")
         hydra_decorators = [
             decorator
-            for decorator in main.decorator_list
+            for decorator in run.decorator_list
             if isinstance(decorator, ast.Call)
             and isinstance(decorator.func, ast.Attribute)
             and isinstance(decorator.func.value, ast.Name)

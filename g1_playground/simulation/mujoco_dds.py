@@ -16,7 +16,7 @@ class G1MujocoDdsServer:
     def __init__(
         self,
         backend,
-        bridge,
+        robot_endpoint,
         lowstate_factory: Callable,
         torque_limits,
         *,
@@ -28,7 +28,7 @@ class G1MujocoDdsServer:
         if not 0.0 < command_timeout < np.inf:
             raise ValueError("DDS command timeout must be finite and positive")
         self.backend = backend
-        self.bridge = bridge
+        self.robot_endpoint = robot_endpoint
         self.lowstate_factory = lowstate_factory
         self.torque_limits = np.asarray(torque_limits, dtype=np.float64)
         self.timestep = backend.timestep
@@ -79,13 +79,13 @@ class G1MujocoDdsServer:
         snapshot.tau_est = state.joint_torque.tolist()
         snapshot.quaternion = state.base_quaternion_wxyz.tolist()
         snapshot.gyroscope = state.base_angular_velocity.tolist()
-        return self.bridge.publish_lowstate(snapshot)
+        return self.robot_endpoint.publish_lowstate(snapshot)
 
     def step(self, now: float | None = None) -> int:
         now = self._clock() if now is None else now
         if not np.isfinite(now):
             raise RuntimeError("DDS simulator clock returned a non-finite value")
-        command = self.bridge.get_command()
+        command = self.robot_endpoint.get_command()
         torque = self.command_torque(command, self._state, now)
         self._state = self.backend.step(torque, self.support_scale(now))
         return self.publish(self._state)
@@ -107,4 +107,4 @@ class G1MujocoDdsServer:
             self.shutdown()
 
     def shutdown(self) -> bool:
-        return self.bridge.close()
+        return self.robot_endpoint.close()

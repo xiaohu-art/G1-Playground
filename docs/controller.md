@@ -10,7 +10,7 @@ Controllers are operator-input sources. They do not own the policy, environment 
 [`Controller`](../g1_playground/controller/base_ctrl.py) is a concrete queue consumer. `JoystickCtrl` and `UnitreeCtrl`
 are sibling subclasses that only connect different producers to those queues; neither input source inherits from the
 other. The deployment profile selects one `controller._target_`, and
-[`scripts/run_pipeline.py`](../scripts/run_pipeline.py) constructs it with the shared `G1Env`.
+[`scripts/pipeline.py`](../scripts/pipeline.py) constructs it with the shared `G1Env`.
 
 ## Read contract
 
@@ -41,9 +41,9 @@ It is used by the two-process DDS simulation:
 
 ```bash
 # Terminal 1: mandatory-viewer simulator
-python scripts/run_mujoco_dds_server.py
+python scripts/simulate.py
 # Terminal 2: policy client and local joystick
-python scripts/run_pipeline.py deployment=sim
+python scripts/pipeline.py deployment=sim
 ```
 
 If no local controller is connected, the producer keeps all axes at zero. In that case `A` is unavailable; use
@@ -56,7 +56,7 @@ If no local controller is connected, the producer keeps all axes at zero. In tha
 only by `deployment=real`:
 
 ```bash
-python scripts/run_pipeline.py deployment=real env.net_if=ROBOT_NIC
+python scripts/pipeline.py deployment=real env.net_if=ROBOT_NIC
 ```
 
 > [!CAUTION]

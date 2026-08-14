@@ -4,10 +4,14 @@
 
 G1-Playground is limited to Unitree G1 29DoF locomotion. The top-level Hydra deployment group has only `sim` (the
 default, UnitreeCpp over Domain 1/`lo`) and `real` (hardware over Domain 0/a robot-facing interface). Both use the
-explicit control loop in `scripts/run_pipeline.py`, the single top-level `g1_playground.g1_env.G1Env`, and the same
+explicit control loop in `scripts/pipeline.py`, the single top-level `g1_playground.g1_env.G1Env`, and the same
 `UnitreeWoGaitPolicy`; they vary operator input, endpoint, and MotionSwitcher requirement. The runtime boundary is
 `Policy → G1Env → DDS → real G1 / MuJoCo server`. Simulation is always the two-process DDS path and its standalone
-server always owns an official MuJoCo viewer. Read `docs/architecture.md` before changing this boundary. Do not
+server always owns an official MuJoCo viewer. `G1Env` constructs the native `G1DdsControlEndpoint` in both deployments;
+only the simulator process constructs the native `G1DdsRobotEndpoint`. The physical G1 itself fills the robot-endpoint
+role and never depends on the simulation endpoint. `G1DdsControlEndpoint` and `G1DdsRobotEndpoint` are independent
+boundaries that share only neutral native wire helpers such as CRC and endpoint initialization. Read
+`docs/architecture.md` before changing this boundary. Do not
 reintroduce a direct `MujocoEnv`, a `dds_sim` alias, partial-DoF policies, motion tracking, other robots, or extra
 registries without an explicit architecture decision and tests.
 
@@ -17,11 +21,11 @@ registries without an explicit architecture decision and tests.
   `configs/robot/g1.yaml`: XML, G1 runtime joint order, and simulator torque limits;
   `configs/policy/unitree_wo_gait.yaml`: checkpoint, one `dof` block (joint order/default pose/Kp/Kd), scales, and maximum
   commands; `configs/deployment/`: only endpoint/topics, MotionSwitcher requirement, and controller target for `sim` and
-  `real`. Do not duplicate environment target or control period in deployment YAML. `scripts/run_pipeline.py` uses
+  `real`. Do not duplicate environment target or control period in deployment YAML. `scripts/pipeline.py` uses
   `compose_dof_config(cfg.robot.dof, cfg.policy.dof)`, constructs the policy, and injects `policy.dt` into `G1Env` with the
   composed DoF. Do not add robot-side pose/gains, a second policy DoF list, or a post-construction override path.
 - `g1_playground/g1_env.py`, `g1_playground/controller/`, and `g1_playground/policy/`: the single G1 DDS environment,
-  operator input, and policy implementation. `scripts/run_pipeline.py` is the only policy composition root and spells
+  operator input, and policy implementation. `scripts/pipeline.py` is the only policy composition root and spells
   out the complete startup/active lifecycle; do not recreate a transition module, pipeline package, environment hierarchy/package,
   manager, registry, or wrapper class around this loop. Preserve the
   direct policy-runtime data path: `G1Env.read()` returns one frozen `G1State`; `Controller.read()` returns
@@ -35,7 +39,7 @@ registries without an explicit architecture decision and tests.
   `backend.step(torque, support_scale)` per tick. That locked call sets support, advances physics, and returns the single
   new detached/read-only snapshot. `G1MujocoBackend.timestep` is the sole physics-period owner; do not add a server copy.
 - `assets/robots/g1/` and `assets/models/g1/unitree/`: the 29DoF XML/meshes and sole TorchScript checkpoint.
-- `scripts/run_mujoco_dds_server.py`: the standalone simulator assembly root. It reads the existing
+- `scripts/simulate.py`: the standalone simulator assembly root. It reads the existing
   `configs/robot/g1.yaml` and `configs/deployment/sim.yaml` fragments directly; there is no second Hydra root for the
   server. The backend default owns the 1 ms physics/DDS period, the server default owns its 0.1-second watchdog, and the
   launcher constant owns the 60 Hz viewer rate. The main thread always owns official
@@ -47,7 +51,8 @@ registries without an explicit architecture decision and tests.
   the policy client because the standalone server does not consume policy-launcher overrides.
 - `scripts/`: the policy launcher, mandatory-viewer simulator entry point, and vendored `unitree_cpp` installer.
 - `docs/`: current architecture, component contracts, and hardware safety procedures. Phase and pre-DDS records are
-  historical evidence; do not rewrite old commands or results as though the current architecture produced them.
+  historical evidence; do not rewrite old commands, results, or names such as `G1DdsSimServer`/`dds_sim_server.cpp` as
+  though the current architecture produced them.
 - `tests/test_full_imports.py`: tracked configuration contracts, 29DoF invariants, asset closure, and model-shape tests.
 - `third_party/`: tracked vendors, not Git submodules. Preserve recorded revisions/licenses, do not run repository
   formatters over them, and document direct vendor changes in the relevant phase/design record. Keep the pre-DDS
@@ -61,9 +66,9 @@ dependencies. Do not restore wrapper/progress abstractions without a concrete co
 
 ```bash
 python -m pip install -e ".[dev]"
-python scripts/install_third_party.py unitree_cpp
-python scripts/run_mujoco_dds_server.py                 # terminal 1; viewer is mandatory
-python scripts/run_pipeline.py deployment=sim           # terminal 2
+python scripts/setup/install_third_party.py unitree_cpp
+python scripts/simulate.py                              # terminal 1; viewer is mandatory
+python scripts/pipeline.py deployment=sim               # terminal 2
 python -m unittest discover -s tests -p 'test_*.py' -v
 ruff check g1_playground scripts tests
 ruff format --check g1_playground scripts tests
@@ -94,15 +99,17 @@ Do not reintroduce a
 `g1_playground/config` package, Python configuration objects, a direct MuJoCo environment, a pipeline abstraction, or a
 compatibility loader. The simulator launcher is an assembly root, not a Hydra application or second schema validator: it
 loads the robot XML/limits and simulation DDS endpoint from their existing fragments, then constructs
-`G1MujocoBackend`, `G1MujocoDdsServer`, and the native DDS boundary. Do not restore duplicate YAML fields or Python guards
-that lock the 1 ms/0.1-second defaults. Keep only owner-boundary invariants: the backend checks its
-model/timestep, the server requires a finite positive watchdog timeout, and native code checks the DDS endpoint/wire.
+`G1MujocoBackend`, `G1MujocoDdsServer`, and the simulation-only native `G1DdsRobotEndpoint`. The real profile instead
+reaches the physical G1 through `G1Env`'s native `G1DdsControlEndpoint`; do not route it through the simulated robot
+endpoint. Do not restore duplicate YAML fields or Python guards that lock the 1 ms/0.1-second defaults. Keep only
+owner-boundary invariants: the backend checks its model/timestep, the server requires a finite positive watchdog timeout,
+and native code checks the DDS endpoint/wire.
 
 `UnitreeWoGaitPolicy.FREQ=50`, `HISTORY_LENGTH=5`, and `HISTORY_LAYOUT` are checkpoint/class contracts. Keep them out of
 Hydra unless the model contract itself changes. `robot.dof.torque_limits` is clipped by the simulator server only; the
 live client has neither a position-limit configuration nor a hardware torque clamp.
 
-Keep the control order directly visible in `scripts/run_pipeline.py`: composition, self-check, dry frames, preflight,
+Keep the control order directly visible in `scripts/pipeline.py`: composition, self-check, dry frames, preflight,
 activation, 3-second standing ramp, policy-history reset, 5-second zero-command blend, paced active loop, and teardown.
 The pure quaternion tilt predicate `is_upright()` belongs in `g1_playground/utils/math.py`; do not recreate a
 transition/runner abstraction or move controller/policy-aware lifecycle code into generic utilities. In simulation the

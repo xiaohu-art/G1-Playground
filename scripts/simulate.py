@@ -19,7 +19,7 @@ def build_server() -> G1MujocoDdsServer:
     except ImportError as error:
         raise RuntimeError(
             "The MuJoCo DDS server requires the vendored unitree_cpp binding; "
-            "run 'python scripts/install_third_party.py unitree_cpp' first"
+            "run 'python scripts/setup/install_third_party.py unitree_cpp' first"
         ) from error
 
     endpoint = {
@@ -34,18 +34,18 @@ def build_server() -> G1MujocoDdsServer:
         resolve_repo_path(robot.xml),
         elastic_support_scale=1.0,
     )
-    bridge = None
+    robot_endpoint = None
     try:
-        bridge = unitree_cpp.G1DdsSimServer(endpoint)
+        robot_endpoint = unitree_cpp.G1DdsRobotEndpoint(endpoint)
         return G1MujocoDdsServer(
             backend,
-            bridge,
+            robot_endpoint,
             unitree_cpp.DdsLowStateSnapshot,
             robot.dof.torque_limits,
         )
     except BaseException:
-        if bridge is not None:
-            bridge.close()
+        if robot_endpoint is not None:
+            robot_endpoint.close()
         raise
 
 
@@ -116,9 +116,5 @@ def run() -> None:
         return
 
 
-def main() -> None:
-    run()
-
-
 if __name__ == "__main__":
-    main()
+    run()

@@ -84,6 +84,16 @@ class TestDdsPhase1Boundary(unittest.TestCase):
         phase2_boundary = json.loads(PHASE2_BOUNDARY_PATH.read_text())
         phase1_snapshot = phase2_boundary["vendor"]["phase1_files"]
         self.assertEqual(set(phase1_snapshot), set(baseline))
+        self.assertEqual(
+            {path: phase1_snapshot[path] for path in ("src/unitree_controller.cpp", "src/unitree_controller.hpp")},
+            {
+                "src/unitree_controller.cpp": "35dd91c38c4638c32384884af19184928d23d8f74357c60a3900cac0fc64a079",
+                "src/unitree_controller.hpp": "5872e410bcb43165a0ea479d14d8bf2026d2b8851fbf3ad2106b70d1ba5bc211",
+            },
+        )
+        self.assertTrue(
+            {"src/g1_dds_control_endpoint.cpp", "src/g1_dds_control_endpoint.hpp"}.isdisjoint(phase1_snapshot)
+        )
         changes = classify_changes(baseline, phase1_snapshot)
 
         self.assertLessEqual(set(allowed["modified"]), set(baseline))

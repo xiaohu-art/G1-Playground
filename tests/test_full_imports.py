@@ -37,11 +37,12 @@ EXPECTED_UNITREE_CPP_FILES = {
     "example/requirements.txt",
     "example/unitree_cpp_env.py",
     "pyproject.toml",
-    "src/dds_sim_server.cpp",
-    "src/dds_sim_server.hpp",
+    "src/dds_utils.hpp",
+    "src/g1_dds_control_endpoint.cpp",
+    "src/g1_dds_control_endpoint.hpp",
+    "src/g1_dds_robot_endpoint.cpp",
+    "src/g1_dds_robot_endpoint.hpp",
     "src/py_binding.cpp",
-    "src/unitree_controller.cpp",
-    "src/unitree_controller.hpp",
     "src/unitree_cpp/__init__.py",
 }
 
@@ -166,12 +167,15 @@ class TestFullImports(unittest.TestCase):
             self.skipTest(f"vendored unitree_cpp binding is not built or installed: {exc}")
 
         native_binding = importlib.import_module("unitree_cpp.unitree_cpp")
-        native_config = native_binding.UnitreeConfig()
+        native_config = native_binding.G1DdsControlEndpointConfig()
         native_config.domain_id = 1
         self.assertEqual(native_config.domain_id, 1)
-        self.assertTrue(hasattr(native_binding, "ControllerState"))
-        self.assertTrue(hasattr(native_binding.UnitreeController, "activate_commands"))
-        self.assertTrue(hasattr(native_binding.UnitreeController, "lifecycle_state"))
+        self.assertTrue(hasattr(native_binding, "DdsControlEndpointState"))
+        self.assertTrue(hasattr(native_binding.G1DdsControlEndpoint, "activate_commands"))
+        self.assertTrue(hasattr(native_binding.G1DdsControlEndpoint, "lifecycle_state"))
+        for legacy_name in ("ControllerState", "G1DdsBridge", "UnitreeConfig", "UnitreeController"):
+            with self.subTest(legacy_name=legacy_name):
+                self.assertFalse(hasattr(native_binding, legacy_name))
 
         environment_class = importlib.import_module("g1_playground.g1_env").G1Env
         self.assertEqual(environment_class.__name__, "G1Env")
@@ -243,7 +247,7 @@ class TestFullImports(unittest.TestCase):
             with self.subTest(obsolete_path=obsolete_path):
                 self.assertFalse(obsolete_path.exists())
 
-        installer = REPO_ROOT / "scripts/install_third_party.py"
+        installer = REPO_ROOT / "scripts/setup/install_third_party.py"
         self.assertTrue(installer.is_file())
         installer_source = installer.read_text()
         self.assertIn('"unitree_cpp": ROOT_DIR / "third_party/unitree_cpp"', installer_source)

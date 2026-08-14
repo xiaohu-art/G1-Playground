@@ -2,12 +2,12 @@
 #include <pybind11/stl.h>
 #include <string>
 #include <vector>
-#include "dds_sim_server.hpp"
-#include "unitree_controller.hpp"
+#include "g1_dds_control_endpoint.hpp"
+#include "g1_dds_robot_endpoint.hpp"
 
 namespace py = pybind11;
 
-void bind_DdsSimServer(py::module_& m) {
+void bind_G1DdsRobotEndpoint(py::module_& m) {
     py::class_<DdsCommandSnapshot>(m, "DdsCommandSnapshot")
         .def(py::init<>())
         .def_readonly("valid", &DdsCommandSnapshot::valid)
@@ -43,53 +43,53 @@ void bind_DdsSimServer(py::module_& m) {
                 std::copy(bytes.begin(), bytes.end(), self.wireless_remote.begin());
             });
 
-    py::class_<DdsSimServerStats>(m, "DdsSimServerStats")
-        .def_readonly("accepted_commands", &DdsSimServerStats::accepted_commands)
-        .def_readonly("crc_errors", &DdsSimServerStats::crc_errors)
-        .def_readonly("finite_errors", &DdsSimServerStats::finite_errors)
-        .def_readonly("mode_errors", &DdsSimServerStats::mode_errors);
+    py::class_<G1DdsRobotEndpointStats>(m, "G1DdsRobotEndpointStats")
+        .def_readonly("accepted_commands", &G1DdsRobotEndpointStats::accepted_commands)
+        .def_readonly("crc_errors", &G1DdsRobotEndpointStats::crc_errors)
+        .def_readonly("finite_errors", &G1DdsRobotEndpointStats::finite_errors)
+        .def_readonly("mode_errors", &G1DdsRobotEndpointStats::mode_errors);
 
-    py::class_<G1DdsSimServer>(m, "G1DdsSimServer")
+    py::class_<G1DdsRobotEndpoint>(m, "G1DdsRobotEndpoint")
         .def(py::init([](py::dict cfg_dict) {
-            DdsSimServerConfig cfg;
+            G1DdsRobotEndpointConfig cfg;
             cfg.domain_id = cfg_dict["domain_id"].cast<std::int32_t>();
             cfg.net_if = cfg_dict["net_if"].cast<std::string>();
             cfg.lowcmd_topic = cfg_dict["lowcmd_topic"].cast<std::string>();
             cfg.lowstate_topic = cfg_dict["lowstate_topic"].cast<std::string>();
             cfg.mode_machine = cfg_dict["mode_machine"].cast<std::uint8_t>();
-            return new G1DdsSimServer(cfg);
+            return new G1DdsRobotEndpoint(cfg);
         }))
-        .def("get_command", &G1DdsSimServer::get_command)
-        .def("publish_lowstate", &G1DdsSimServer::publish_lowstate)
-        .def_property_readonly("stats", &G1DdsSimServer::stats)
-        .def("close", &G1DdsSimServer::close);
+        .def("get_command", &G1DdsRobotEndpoint::get_command)
+        .def("publish_lowstate", &G1DdsRobotEndpoint::publish_lowstate)
+        .def_property_readonly("stats", &G1DdsRobotEndpoint::stats)
+        .def("close", &G1DdsRobotEndpoint::close);
 }
 
-void bind_ControllerState(py::module_& m) {
-    py::enum_<unitree_cpp_detail::ControllerState>(m, "ControllerState")
-        .value("RECEIVING", unitree_cpp_detail::ControllerState::RECEIVING)
-        .value("ACTIVE", unitree_cpp_detail::ControllerState::ACTIVE)
-        .value("CLOSED", unitree_cpp_detail::ControllerState::CLOSED)
+void bind_DdsControlEndpointState(py::module_& m) {
+    py::enum_<unitree_cpp_detail::DdsControlEndpointState>(m, "DdsControlEndpointState")
+        .value("RECEIVING", unitree_cpp_detail::DdsControlEndpointState::RECEIVING)
+        .value("ACTIVE", unitree_cpp_detail::DdsControlEndpointState::ACTIVE)
+        .value("CLOSED", unitree_cpp_detail::DdsControlEndpointState::CLOSED)
         .export_values();
 }
 
-void bind_UnitreeConfig(py::module_& m) {
-    py::class_<UnitreeConfig>(m, "UnitreeConfig")
+void bind_G1DdsControlEndpointConfig(py::module_& m) {
+    py::class_<G1DdsControlEndpointConfig>(m, "G1DdsControlEndpointConfig")
         .def(py::init<>())
-        .def_readwrite("net_if", &UnitreeConfig::net_if)
-        .def_readwrite("domain_id", &UnitreeConfig::domain_id)
-        .def_readwrite("control_dt", &UnitreeConfig::control_dt)
-        .def_readwrite("msg_type", &UnitreeConfig::msg_type)
-        .def_readwrite("control_mode", &UnitreeConfig::control_mode)
-        .def_readwrite("hand_type", &UnitreeConfig::hand_type)
-        .def_readwrite("lowcmd_topic", &UnitreeConfig::lowcmd_topic)
-        .def_readwrite("lowstate_topic", &UnitreeConfig::lowstate_topic)
-        .def_readwrite("enable_odometry", &UnitreeConfig::enable_odometry)
-        .def_readwrite("sport_state_topic", &UnitreeConfig::sport_state_topic)
-        .def_readwrite("stiffness", &UnitreeConfig::stiffness)
-        .def_readwrite("damping", &UnitreeConfig::damping)
-        .def_readwrite("num_dofs", &UnitreeConfig::num_dofs)
-        .def_readwrite("motion_switcher_required", &UnitreeConfig::motion_switcher_required);
+        .def_readwrite("net_if", &G1DdsControlEndpointConfig::net_if)
+        .def_readwrite("domain_id", &G1DdsControlEndpointConfig::domain_id)
+        .def_readwrite("control_dt", &G1DdsControlEndpointConfig::control_dt)
+        .def_readwrite("msg_type", &G1DdsControlEndpointConfig::msg_type)
+        .def_readwrite("control_mode", &G1DdsControlEndpointConfig::control_mode)
+        .def_readwrite("hand_type", &G1DdsControlEndpointConfig::hand_type)
+        .def_readwrite("lowcmd_topic", &G1DdsControlEndpointConfig::lowcmd_topic)
+        .def_readwrite("lowstate_topic", &G1DdsControlEndpointConfig::lowstate_topic)
+        .def_readwrite("enable_odometry", &G1DdsControlEndpointConfig::enable_odometry)
+        .def_readwrite("sport_state_topic", &G1DdsControlEndpointConfig::sport_state_topic)
+        .def_readwrite("stiffness", &G1DdsControlEndpointConfig::stiffness)
+        .def_readwrite("damping", &G1DdsControlEndpointConfig::damping)
+        .def_readwrite("num_dofs", &G1DdsControlEndpointConfig::num_dofs)
+        .def_readwrite("motion_switcher_required", &G1DdsControlEndpointConfig::motion_switcher_required);
 }
 
 void bind_RobotState(py::module_& m) {
@@ -132,11 +132,11 @@ void bind_RobotState(py::module_& m) {
         .def_readwrite("velocity", &SportState::velocity);
 }
 
-// UnitreeController Class
-void bind_UnitreeController(py::module_& m) {
-    py::class_<UnitreeController>(m, "UnitreeController")
+// G1DdsControlEndpoint Class
+void bind_G1DdsControlEndpoint(py::module_& m) {
+    py::class_<G1DdsControlEndpoint>(m, "G1DdsControlEndpoint")
         .def(py::init([](py::dict cfg_dict) {
-            UnitreeConfig cfg;
+            G1DdsControlEndpointConfig cfg;
 
             cfg.net_if = cfg_dict["net_if"].cast<std::string>();
             cfg.domain_id = cfg_dict["domain_id"].cast<std::int32_t>();
@@ -164,27 +164,27 @@ void bind_UnitreeController(py::module_& m) {
             else
                 throw std::invalid_argument("Invalid control_mode");
 
-            return new UnitreeController(cfg);
+            return new G1DdsControlEndpoint(cfg);
         }))
-        .def(py::init<const UnitreeConfig&>(), py::arg("config"))
-        .def("activate_commands", &UnitreeController::activate_commands)
-        .def_property_readonly("lifecycle_state", &UnitreeController::lifecycle_state)
-        .def("self_check", &UnitreeController::self_check)
-        .def("step", &UnitreeController::step, py::arg("actions"))
-        .def("step_hands", &UnitreeController::step_hands, py::arg("l_hand_pose"), py::arg("r_hand_pose"))
-        .def("set_gains", &UnitreeController::set_gains, py::arg("stiffness"), py::arg("damping"))
-        .def("shutdown", &UnitreeController::shutdown)
-        .def("get_robot_state", &UnitreeController::get_robot_state)
-        .def("get_sport_state", &UnitreeController::get_sport_state);
+        .def(py::init<const G1DdsControlEndpointConfig&>(), py::arg("config"))
+        .def("activate_commands", &G1DdsControlEndpoint::activate_commands)
+        .def_property_readonly("lifecycle_state", &G1DdsControlEndpoint::lifecycle_state)
+        .def("self_check", &G1DdsControlEndpoint::self_check)
+        .def("step", &G1DdsControlEndpoint::step, py::arg("actions"))
+        .def("step_hands", &G1DdsControlEndpoint::step_hands, py::arg("l_hand_pose"), py::arg("r_hand_pose"))
+        .def("set_gains", &G1DdsControlEndpoint::set_gains, py::arg("stiffness"), py::arg("damping"))
+        .def("shutdown", &G1DdsControlEndpoint::shutdown)
+        .def("get_robot_state", &G1DdsControlEndpoint::get_robot_state)
+        .def("get_sport_state", &G1DdsControlEndpoint::get_sport_state);
 }
 
 PYBIND11_MODULE(unitree_cpp, m) {
-    m.doc() = "pybind11 bindings for UnitreeController";
+    m.doc() = "pybind11 bindings for G1DdsControlEndpoint";
 
-    bind_DdsSimServer(m);
-    bind_ControllerState(m);
+    bind_G1DdsRobotEndpoint(m);
+    bind_DdsControlEndpointState(m);
     // bind_ControlMode(m);
-    bind_UnitreeConfig(m);
+    bind_G1DdsControlEndpointConfig(m);
     bind_RobotState(m);
-    bind_UnitreeController(m);
+    bind_G1DdsControlEndpoint(m);
 }

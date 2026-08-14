@@ -1,15 +1,19 @@
 # G1Env
 
 [`g1_playground/g1_env.py`](../g1_playground/g1_env.py) is the only policy-facing environment. It exposes one G1 state
-snapshot, accepts one 29-joint position target, and adapts that contract to the native Unitree HG DDS client.
+snapshot, accepts one 29-joint position target, and adapts that contract to the native Unitree HG DDS control endpoint.
 
 ```text
-Policy -> G1Env -> DDS -+-> physical G1
-                       +-> G1MujocoDdsServer -> G1MujocoBackend
+sim:  Policy -> G1Env -> G1DdsControlEndpoint <-> DDS <-> G1DdsRobotEndpoint
+                                                              <-> G1MujocoDdsServer <-> G1MujocoBackend
+real: Policy -> G1Env -> G1DdsControlEndpoint <-> DDS <-> physical G1
 ```
 
 There is no environment base class, backend selector, direct `MujocoEnv`, or separate Unitree C++ environment wrapper.
 `domain_id` and `net_if` describe a DDS endpoint; they do not select simulator versus hardware behavior.
+`G1Env` constructs `unitree_cpp.G1DdsControlEndpoint` for both profiles. The native `G1DdsRobotEndpoint` exists only in
+the standalone simulator; `deployment=real` communicates with the physical G1 and never constructs the simulated robot
+endpoint.
 
 ## Construction and ownership
 
@@ -37,7 +41,7 @@ Every `read()` pulls exactly one native LowState and returns a frozen `G1State` 
 - `base_quat`: `[x, y, z, w]`;
 - `base_ang_vel`: three angular-velocity values.
 
-All four NumPy arrays are detached copies and read-only. `scripts/run_pipeline.py` passes the same snapshot to
+All four NumPy arrays are detached copies and read-only. `scripts/pipeline.py` passes the same snapshot to
 `is_upright(state.base_quat)` and `policy.act(state, control)`; the tilt check does not ask the environment for another
 state.
 
@@ -52,7 +56,7 @@ Construction creates receive resources only. `self_check()` waits for a valid Lo
 - `sim`: `motion_switcher_required=false`, because the simulator has no MotionSwitcher service;
 - `real`: `motion_switcher_required=true`, requiring bounded successful check/release before LowCmd creation.
 
-The native client checks CRC, mode, finite values, advancing tick, and freshness. State older than
+The native `G1DdsControlEndpoint` checks CRC, mode, finite values, advancing tick, and freshness. State older than
 `max(5 * control_dt, 0.1 s)` is rejected. The writer publishes at `control_dt`; a stale application target or stale
 LowState triggers one `Kp=0`, `Kd=5` damping command, clears the cached command, and rejects continued use. `shutdown()`
 is idempotent and sends damping only after activation.
@@ -71,7 +75,9 @@ instead of bypassing DDS to mutate backend state.
 
 ## Simulator peer
 
-The standalone simulator is a DDS peer, not an environment implementation. On each 1 ms tick the server computes PD
+The standalone simulator is a DDS peer, not an environment implementation. Its simulation-only native
+[`G1DdsRobotEndpoint`](../third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp) receives LowCmd and publishes LowState;
+it is injected into `G1MujocoDdsServer` and contains no MuJoCo physics. On each 1 ms tick the server computes PD
 torque from its cached previous `MujocoState`, clips by `robot.dof.torque_limits`, and calls
 `backend.step(torque, support_scale)` once. That locked call sets elastic support, advances physics, and returns the only
 new read-only state snapshot for publication and the next tick. `G1MujocoBackend.timestep` is the single physics-period

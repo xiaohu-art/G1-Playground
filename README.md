@@ -11,7 +11,10 @@ the same DDS-facing `G1Env`; the selected endpoint, operator input, and hardware
 | `deployment=real` | `UnitreeCtrl` | `G1Env` | Domain 0 / robot-facing interface → G1 |
 
 The public runtime path is `Policy → G1Env → DDS → real G1 / MuJoCo server`. `G1Env` does not select or directly
-call a physics backend: both deployments cross the same HG LowState/LowCmd wire boundary.
+call a physics backend: both deployments cross the same HG LowState/LowCmd wire boundary through
+`unitree_cpp.G1DdsControlEndpoint`. Only the standalone simulator constructs `unitree_cpp.G1DdsRobotEndpoint`; on
+`deployment=real`, the physical G1 itself fills the robot-endpoint role and no simulated endpoint is created. The two
+native classes do not call or own each other; they only share neutral CRC and DDS endpoint helpers inside the extension.
 
 There is no direct in-process `MujocoEnv` path. Simulation is intentionally a two-process DDS system. The standalone
 server retains the repository-owned `G1MujocoBackend` physics core and always opens the official MuJoCo viewer.
@@ -31,10 +34,11 @@ cd G1-Playground
 conda create -n g1-playground python=3.11 -y
 conda activate g1-playground
 python -m pip install -e .
-python scripts/install_third_party.py unitree_cpp
+python scripts/setup/install_third_party.py unitree_cpp
 ```
 
-The simulation and hardware paths both require the vendored `unitree_cpp` binding, Unitree SDK2, and CycloneDDS. The
+The simulation and hardware paths both require the vendored `unitree_cpp` binding, Unitree SDK2, and CycloneDDS because
+`G1Env` uses its `G1DdsControlEndpoint`. The binding's `G1DdsRobotEndpoint` is an additional simulation-only adapter. The
 simulator GUI comes from the official `mujoco.viewer` module installed by the pinned `mujoco` dependency. The retained
 `third_party/mujoco_viewer` source tree is vendored historical content and is not used at runtime. The tracked dependency
 trees are ordinary directories, not Git submodules.
@@ -72,7 +76,7 @@ only DDS endpoint/topics, the MotionSwitcher requirement, and its controller tar
 Domain 1/`lo` plus `JoystickCtrl` with `sim`, and Domain 0/a robot-facing interface plus `UnitreeCtrl` with `real`; `domain_id`
 and `net_if` are endpoint data, not backend type tags.
 
-Hydra passes the composed `DictConfig` directly to `scripts/run_pipeline.py`. Its `run()` function:
+Hydra passes the composed `DictConfig` directly to `scripts/pipeline.py`. Its `run()` function:
 
 1. reorders the single `cfg.policy.dof` pose and gains into robot joint order with
    `compose_dof_config(cfg.robot.dof, cfg.policy.dof)`;
@@ -88,7 +92,7 @@ effective DoF configuration and the policy-owned period at construction; there i
 To inspect the resolved real configuration without constructing a runtime or connecting to the robot:
 
 ```bash
-python scripts/run_pipeline.py --cfg job --resolve deployment=real env.net_if=enP8p1s0
+python scripts/pipeline.py --cfg job --resolve deployment=real env.net_if=enP8p1s0
 ```
 
 ## Run the DDS MuJoCo Simulation
@@ -97,25 +101,27 @@ Simulation always uses two terminals. Start the simulator first:
 
 ```bash
 # Terminal 1
-python scripts/run_mujoco_dds_server.py
+python scripts/simulate.py
 ```
 
 This command requires a working display and always opens the server-owned MuJoCo GUI. The main thread owns official
 `mujoco.viewer.launch_passive()` on separate render data, while the physics/DDS loop runs at 1 kHz in a background thread.
 Backend stepping and render-data copying share a lock, and viewer interaction never writes back into physics. Closing the
-window stops the worker and closes the DDS bridge and viewer.
+window stops the worker and closes the native `G1DdsRobotEndpoint` and viewer.
 
 Then start the policy client:
 
 ```bash
 # Terminal 2
-python scripts/run_pipeline.py
+python scripts/pipeline.py
 # Equivalent explicit Hydra override:
-python scripts/run_pipeline.py deployment=sim
+python scripts/pipeline.py deployment=sim
 ```
 
 The policy client uses `G1Env` on Domain 1/`lo`, exactly as declared by `configs/deployment/sim.yaml`; it does not create
-or own a MuJoCo viewer. The server publishes HG `rt/lowstate`, subscribes to HG `rt/lowcmd`, and advances
+or own a MuJoCo viewer. The simulator's native
+[`G1DdsRobotEndpoint`](third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp) publishes HG `rt/lowstate` and subscribes to
+HG `rt/lowcmd`; `G1MujocoDdsServer` consumes its snapshots and advances
 `G1MujocoBackend` from the repository-owned G1 XML at 1 kHz. Each tick computes PD torque from the cached previous state,
 clips it to `robot.dof.torque_limits`, then makes one locked `backend.step(torque, support_scale)` call. That call advances
 physics and returns the only new snapshot for publication and the next tick. The backend is the single owner of the
@@ -136,11 +142,11 @@ the server. These are simulation defaults under evaluation, not safety-certified
 The simulator is a separate DDS peer outside `G1Env`; it does not load a policy or controller. The complete boundary is:
 
 ```text
-run_pipeline.py
-  JoystickCtrl → UnitreeWoGaitPolicy → G1Env
-                                      ⇅ HG DDS
-run_mujoco_dds_server.py
-  G1MujocoDdsServer → G1MujocoBackend → official MuJoCo viewer
+pipeline.py
+  JoystickCtrl → UnitreeWoGaitPolicy → G1Env → G1DdsControlEndpoint
+                                                                    ⇅ HG DDS
+simulate.py
+  G1DdsRobotEndpoint → G1MujocoDdsServer → G1MujocoBackend → official MuJoCo viewer
 ```
 
 ## Run on a Real G1
@@ -158,14 +164,15 @@ Configure the robot-facing interface as described in the [G1 setup guide](docs/u
 profile only after completing its safety checklist:
 
 ```bash
-python scripts/run_pipeline.py deployment=real env.net_if=enP8p1s0
+python scripts/pipeline.py deployment=real env.net_if=enP8p1s0
 ```
 
 Replace `enP8p1s0` with the exact robot-facing interface. Startup first receives and validates LowState without a command
 publisher. The launcher then performs a final preflight, activates command transport, ramps from the measured pose to
 standing over 3 seconds, resets policy history, and blends into zero-command closed-loop control over 5 seconds.
 Simulation creates LowCmd transport without MotionSwitcher; real deployment requires MotionSwitcher availability and a
-bounded successful release before creating that transport.
+bounded successful release before creating that transport. This path uses `G1Env`'s native `G1DdsControlEndpoint`
+directly against the physical G1; it neither constructs nor depends on the simulation-only `G1DdsRobotEndpoint`.
 
 The Unitree remote uses the same velocity axes as the local simulation controller. Keep the independent hardware stop
 guarded throughout the run and press `A` for software shutdown at the first sign of instability.
@@ -181,8 +188,12 @@ guarded throughout the run and press `A` for software shutdown at the first sign
 - `g1_playground/controller/`: Xbox and Unitree remote input.
 - `g1_playground/simulation/`: retained `G1MujocoBackend`, elastic support, and the viewer-free DDS-server loop.
 - `g1_playground/utils/math.py`: pure quaternion/gravity and tilt calculations.
-- `scripts/run_pipeline.py`: the Hydra composition root and explicit startup/active policy loop for both deployments.
-- `scripts/run_mujoco_dds_server.py`: direct-config, mandatory-viewer HG DDS simulator on Domain 1/`lo` for
+- `scripts/pipeline.py`: the Hydra composition root and explicit startup/active policy loop for both deployments.
+- `scripts/simulate.py`: direct-config, mandatory-viewer HG DDS simulator on Domain 1/`lo` for
+  `deployment=sim`.
+- `third_party/unitree_cpp/src/g1_dds_control_endpoint.cpp`: native policy-side LowCmd/LowState endpoint used by both
+  deployments.
+- `third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp`: native simulated-robot LowCmd/LowState endpoint used only by
   `deployment=sim`.
 - `third_party/`: pinned vendor source trees and licenses; the legacy MuJoCo viewer is not a runtime dependency.
 

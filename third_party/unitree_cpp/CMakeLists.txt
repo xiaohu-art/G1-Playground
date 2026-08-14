@@ -36,9 +36,9 @@ message(STATUS "Found ddscxx root include: ${DDSCXX_ROOT_INCLUDE}")
 # Add a library using FindPython's tooling (pybind11 also provides a helper like
 # this)
 python_add_library(unitree_cpp MODULE
-  src/dds_sim_server.cpp
+  src/g1_dds_robot_endpoint.cpp
   src/py_binding.cpp 
-  src/unitree_controller.cpp
+  src/g1_dds_control_endpoint.cpp
   WITH_SOABI
 )
 
@@ -75,7 +75,7 @@ set_target_properties(unitree_cpp PROPERTIES
 # Debug C++ executable
 # ======================
 add_executable(debugcpp
-  src/unitree_controller.cpp
+  src/g1_dds_control_endpoint.cpp
 )
 
 target_include_directories(debugcpp PRIVATE

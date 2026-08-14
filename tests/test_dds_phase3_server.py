@@ -55,10 +55,44 @@ class TestDdsPhase3EvidenceBoundary(unittest.TestCase):
         phase3_files = vendor["phase3_files"]
 
         self.assertEqual(classify_changes(phase2_files, phase3_files), vendor["allowed_changes"])
+        self.assertEqual(
+            vendor["phase3_closure"],
+            {
+                "file_count": 16,
+                "total_bytes": 67930,
+                "sha256": "0bde2a4f5be6b11079b7338b0db1a42786ad9aa5f06b1b145bd58bc86d228557",
+            },
+        )
         self.assertEqual(vendor["phase3_closure"]["file_count"], len(phase3_files))
-        self.assertGreater(vendor["phase3_closure"]["total_bytes"], 0)
-        self.assertEqual(len(vendor["phase3_closure"]["sha256"]), 64)
         self.assertTrue(all(len(digest) == 64 for digest in phase3_files.values()))
+        # These legacy paths and bytes are frozen Phase 3 provenance, not the current live-tree names.
+        self.assertEqual(
+            {
+                path: phase3_files[path]
+                for path in (
+                    "src/dds_sim_server.cpp",
+                    "src/dds_sim_server.hpp",
+                    "src/unitree_controller.cpp",
+                    "src/unitree_controller.hpp",
+                )
+            },
+            {
+                "src/dds_sim_server.cpp": "415732e12877fda942bea5fd5bc067ac1b62eb984550be60a58944358f0abd48",
+                "src/dds_sim_server.hpp": "c55131fe5b02e99417aa883593cd1243596a8c749d564f16a7f3da28d8f1cf05",
+                "src/unitree_controller.cpp": "6aeb1199816fa4830654f439c7d1b169e82ea0dbd0606a58f377806de7abb795",
+                "src/unitree_controller.hpp": "5497d917932993c49a54ead4dcb36ad18aa4f7670f6a02fbda33e27e4f2282f3",
+            },
+        )
+        self.assertTrue(
+            {
+                "src/dds_bridge.cpp",
+                "src/dds_bridge.hpp",
+                "src/g1_dds_control_endpoint.cpp",
+                "src/g1_dds_control_endpoint.hpp",
+                "src/g1_dds_robot_endpoint.cpp",
+                "src/g1_dds_robot_endpoint.hpp",
+            }.isdisjoint(phase3_files)
+        )
 
     def test_phase3_boundary_rejects_unapproved_difference_types(self):
         vendor = self.boundary["vendor"]
@@ -81,27 +115,84 @@ class TestDdsPhase3EvidenceBoundary(unittest.TestCase):
             },
         )
 
-    def test_python_module_exposes_the_minimal_server_surface(self):
+    def test_current_python_module_exposes_the_minimal_endpoint_surface(self):
         cmake = (REPO_ROOT / "third_party/unitree_cpp/CMakeLists.txt").read_text()
         binding = (REPO_ROOT / "third_party/unitree_cpp/src/py_binding.cpp").read_text()
         package = (REPO_ROOT / "third_party/unitree_cpp/src/unitree_cpp/__init__.py").read_text()
 
-        self.assertIn("src/dds_sim_server.cpp", cmake)
+        self.assertIn("src/g1_dds_control_endpoint.cpp", cmake)
+        self.assertIn("src/g1_dds_robot_endpoint.cpp", cmake)
+        self.assertNotIn("src/dds_bridge.cpp", cmake)
+        self.assertNotIn("src/dds_sim_server.cpp", cmake)
+        self.assertNotIn("src/unitree_controller.cpp", cmake)
         for symbol in (
             "DdsCommandSnapshot",
+            "DdsControlEndpointState",
             "DdsLowStateSnapshot",
-            "DdsSimServerStats",
-            "G1DdsSimServer",
+            "G1DdsControlEndpoint",
+            "G1DdsControlEndpointConfig",
+            "G1DdsRobotEndpoint",
+            "G1DdsRobotEndpointConfig",
+            "G1DdsRobotEndpointStats",
             'def("get_command"',
             'def("publish_lowstate"',
             'def("close"',
         ):
             with self.subTest(symbol=symbol):
                 self.assertIn(symbol, binding)
-        self.assertIn("DdsLowStateSnapshot, G1DdsSimServer, UnitreeController", package)
+        for legacy_symbol in (
+            "ControllerState",
+            "DdsBridgeConfig",
+            "DdsBridgeStats",
+            "DdsSimServerConfig",
+            "DdsSimServerStats",
+            "G1DdsBridge",
+            "G1DdsSimServer",
+            "UnitreeConfig",
+            "UnitreeController",
+        ):
+            with self.subTest(legacy_symbol=legacy_symbol):
+                self.assertNotIn(legacy_symbol, binding)
+                self.assertNotIn(legacy_symbol, package)
+        for public_symbol in ("DdsLowStateSnapshot", "G1DdsControlEndpoint", "G1DdsRobotEndpoint"):
+            with self.subTest(public_symbol=public_symbol):
+                self.assertIn(public_symbol, package)
 
 
-class TestDdsPhase3NativeServer(unittest.TestCase):
+class TestCurrentNativeDdsEndpoints(unittest.TestCase):
+    def test_live_native_tree_has_no_legacy_endpoint_aliases(self):
+        source_root = REPO_ROOT / "third_party/unitree_cpp/src"
+        native_source = "\n".join(
+            path.read_text() for pattern in ("*.cpp", "*.hpp") for path in sorted(source_root.glob(pattern))
+        )
+        for legacy_symbol in (
+            "ControllerState",
+            "DdsBridgeConfig",
+            "DdsBridgeStats",
+            "DdsSimServerConfig",
+            "DdsSimServerStats",
+            "G1DdsBridge",
+            "G1DdsSimServer",
+            "UnitreeConfig",
+            "UnitreeController",
+        ):
+            with self.subTest(legacy_symbol=legacy_symbol):
+                self.assertNotIn(legacy_symbol, native_source)
+
+    def test_control_and_robot_endpoints_share_only_neutral_dds_utils(self):
+        source_root = REPO_ROOT / "third_party/unitree_cpp/src"
+        robot_header = (source_root / "g1_dds_robot_endpoint.hpp").read_text()
+        robot_source = (source_root / "g1_dds_robot_endpoint.cpp").read_text()
+        control_header = (source_root / "g1_dds_control_endpoint.hpp").read_text()
+        control_source = (source_root / "g1_dds_control_endpoint.cpp").read_text()
+
+        self.assertIn('#include "dds_utils.hpp"', robot_header + robot_source)
+        self.assertIn('#include "dds_utils.hpp"', control_header + control_source)
+        for robot_file in (robot_header, robot_source):
+            self.assertNotIn("g1_dds_control_endpoint.hpp", robot_file)
+        for control_file in (control_header, control_source):
+            self.assertNotIn("g1_dds_robot_endpoint.hpp", control_file)
+
     def test_native_crc_has_no_private_sdk_header_dependency(self):
         unstable_header = "unitree/dds_wrapper/common/crc.h"
         native_sources = [
@@ -155,8 +246,8 @@ class TestDdsPhase3NativeServer(unittest.TestCase):
             #include <limits>
             #include <stdexcept>
 
-            #include "dds_sim_server.hpp"
-            #include "unitree_controller.hpp"
+            #include "g1_dds_robot_endpoint.hpp"
+            #include "dds_utils.hpp"
 
             template <typename Message>
             std::uint32_t message_crc(Message& message) {
@@ -274,10 +365,10 @@ class TestDdsPhase3NativeServer(unittest.TestCase):
             """
         )
 
-        with tempfile.TemporaryDirectory(prefix="g1-playground-dds-phase3-server-") as temporary_dir:
+        with tempfile.TemporaryDirectory(prefix="g1-playground-dds-phase3-robot-endpoint-") as temporary_dir:
             temporary_path = Path(temporary_dir)
-            source_path = temporary_path / "dds_server_test.cpp"
-            binary_path = temporary_path / "dds_server_test"
+            source_path = temporary_path / "g1_dds_robot_endpoint_test.cpp"
+            binary_path = temporary_path / "g1_dds_robot_endpoint_test"
             source_path.write_text(source)
             compile_result = subprocess.run(
                 [
@@ -287,7 +378,7 @@ class TestDdsPhase3NativeServer(unittest.TestCase):
                     f"-I{sdk_include}",
                     f"-I{dds_include}",
                     source_path,
-                    REPO_ROOT / "third_party/unitree_cpp/src/dds_sim_server.cpp",
+                    REPO_ROOT / "third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp",
                     f"-L{library_dir}",
                     f"-Wl,-rpath,{library_dir}",
                     "-lunitree_sdk2",

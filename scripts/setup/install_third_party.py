@@ -3,7 +3,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
+ROOT_DIR = Path(__file__).resolve().parents[2]
 VENDORED_PACKAGES = {
     "unitree_cpp": ROOT_DIR / "third_party/unitree_cpp",
 }

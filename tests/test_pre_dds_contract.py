@@ -146,7 +146,7 @@ class TestPreDdsContract(unittest.TestCase):
         self.assertNotIn("act", self.g1_real.env)
         self.assertEqual(constructor_dict, expected_constructor)
         binding_source = (REPO_ROOT / "third_party/unitree_cpp/src/py_binding.cpp").read_text()
-        binding_source = binding_source.split("void bind_UnitreeController", 1)[1].split("PYBIND11_MODULE", 1)[0]
+        binding_source = binding_source.split("void bind_G1DdsControlEndpoint", 1)[1].split("PYBIND11_MODULE", 1)[0]
         consumed_keys = list(dict.fromkeys(re.findall(r'cfg_dict\["([a-z_]+)"\]', binding_source)))
         self.assertIn("domain_id", consumed_keys)
         self.assertIn('cfg_dict.contains("motion_switcher_required")', binding_source)
@@ -305,7 +305,7 @@ class TestPreDdsContract(unittest.TestCase):
         np.testing.assert_allclose(observation, expected_observation, rtol=0.0, atol=1e-7)
 
     def test_runtime_constructs_g1_env_with_effective_gains(self):
-        class FakeUnitreeController:
+        class FakeG1DdsControlEndpoint:
             instances = []
 
             def __init__(self, cfg):
@@ -328,7 +328,7 @@ class TestPreDdsContract(unittest.TestCase):
 
             def set_gains(self, stiffness, damping):
                 self.events.append("set_gains")
-                raise AssertionError("runtime must provide final gains to the UnitreeController constructor")
+                raise AssertionError("runtime must provide final gains to the G1DdsControlEndpoint constructor")
 
             def step(self, target):
                 self.events.append("step")
@@ -338,7 +338,7 @@ class TestPreDdsContract(unittest.TestCase):
 
         fake_binding = types.ModuleType("unitree_cpp")
         fake_binding.RobotState = SimpleNamespace
-        fake_binding.UnitreeController = FakeUnitreeController
+        fake_binding.G1DdsControlEndpoint = FakeG1DdsControlEndpoint
         module_name = "g1_playground.g1_env"
         missing = object()
         old_binding = sys.modules.get("unitree_cpp", missing)
@@ -360,7 +360,7 @@ class TestPreDdsContract(unittest.TestCase):
                 dof_cfg=self.effective_dof,
             )
             controller = UnitreeCtrl(env)
-            fake = FakeUnitreeController.instances[-1]
+            fake = FakeG1DdsControlEndpoint.instances[-1]
             self.assertNotIn("set_gains", fake.events)
 
             constructor_cfg = fake.cfg.copy()

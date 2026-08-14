@@ -1,5 +1,5 @@
-#include "dds_sim_server.hpp"
-#include "unitree_controller.hpp"
+#include "g1_dds_robot_endpoint.hpp"
+#include "dds_utils.hpp"
 
 #include <cmath>
 #include <cfloat>
@@ -42,12 +42,12 @@ void ValidateArray(const std::array<double, Size>& values, const char* name) {
 
 }  // namespace
 
-G1DdsSimServer::G1DdsSimServer(const DdsSimServerConfig& cfg) : cfg_(cfg) {
+G1DdsRobotEndpoint::G1DdsRobotEndpoint(const G1DdsRobotEndpointConfig& cfg) : cfg_(cfg) {
     if (cfg_.domain_id < 0 || cfg_.net_if.empty()) {
-        throw std::invalid_argument("DDS simulator endpoint is invalid");
+        throw std::invalid_argument("G1 DDS robot endpoint is invalid");
     }
     if (cfg_.mode_machine != 5) {
-        throw std::invalid_argument("G1 29-DoF DDS simulator requires mode_machine=5");
+        throw std::invalid_argument("G1 DDS robot endpoint requires mode_machine=5");
     }
 
     unitree_cpp_detail::InitializeDdsEndpointOnce(cfg_.domain_id, cfg_.net_if);
@@ -63,11 +63,11 @@ G1DdsSimServer::G1DdsSimServer(const DdsSimServerConfig& cfg) : cfg_(cfg) {
     }
 }
 
-G1DdsSimServer::~G1DdsSimServer() {
+G1DdsRobotEndpoint::~G1DdsRobotEndpoint() {
     CloseTransportNoexcept();
 }
 
-void G1DdsSimServer::LowCommandHandler(const void* message) {
+void G1DdsRobotEndpoint::LowCommandHandler(const void* message) {
     LowCmd low_command = *static_cast<const LowCmd*>(message);
     DdsCommandSnapshot accepted;
     const auto validation = unitree_cpp_detail::ValidateDdsCommandForTest(low_command, cfg_.mode_machine, &accepted);
@@ -93,10 +93,10 @@ void G1DdsSimServer::LowCommandHandler(const void* message) {
     last_command_time_ = Clock::now();
 }
 
-DdsCommandSnapshot G1DdsSimServer::get_command() const {
+DdsCommandSnapshot G1DdsRobotEndpoint::get_command() const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closed_) {
-        throw std::logic_error("DDS simulator server is closed");
+        throw std::logic_error("G1 DDS robot endpoint is closed");
     }
     DdsCommandSnapshot snapshot = command_;
     snapshot.age_seconds = snapshot.valid
@@ -105,7 +105,7 @@ DdsCommandSnapshot G1DdsSimServer::get_command() const {
     return snapshot;
 }
 
-std::uint32_t G1DdsSimServer::publish_lowstate(const DdsLowStateSnapshot& snapshot) {
+std::uint32_t G1DdsRobotEndpoint::publish_lowstate(const DdsLowStateSnapshot& snapshot) {
     ValidateVector(snapshot.q, "q");
     ValidateVector(snapshot.dq, "dq");
     ValidateVector(snapshot.tau_est, "tau_est");
@@ -116,7 +116,7 @@ std::uint32_t G1DdsSimServer::publish_lowstate(const DdsLowStateSnapshot& snapsh
 
     std::lock_guard<std::mutex> lock(mutex_);
     if (closed_ || !lowstate_publisher_) {
-        throw std::logic_error("DDS simulator server is closed");
+        throw std::logic_error("G1 DDS robot endpoint is closed");
     }
 
     unitree_hg::msg::dds_::LowState_ low_state{};
@@ -127,12 +127,12 @@ std::uint32_t G1DdsSimServer::publish_lowstate(const DdsLowStateSnapshot& snapsh
     return next_tick_++;
 }
 
-DdsSimServerStats G1DdsSimServer::stats() const {
+G1DdsRobotEndpointStats G1DdsRobotEndpoint::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
 }
 
-bool G1DdsSimServer::close() {
+bool G1DdsRobotEndpoint::close() {
     unitree::robot::ChannelSubscriberPtr<LowCmd> subscriber;
     unitree::robot::ChannelPublisherPtr<LowState> publisher;
     {
@@ -153,7 +153,7 @@ bool G1DdsSimServer::close() {
     return true;
 }
 
-void G1DdsSimServer::CloseTransportNoexcept() noexcept {
+void G1DdsRobotEndpoint::CloseTransportNoexcept() noexcept {
     try {
         close();
     } catch (...) {

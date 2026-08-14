@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from g1_playground.simulation import G1MujocoBackend
-from g1_playground.simulation.g1_mujoco_dds_server import G1MujocoDdsServer
+from g1_playground.simulation.mujoco_dds import G1MujocoDdsServer
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -176,7 +176,7 @@ def make_server(backend, bridge, **kwargs):
 
 
 def load_launcher():
-    source_path = REPO_ROOT / "scripts/run_mujoco_dds_server.py"
+    source_path = REPO_ROOT / "scripts/simulate.py"
     spec = importlib.util.spec_from_file_location("g1_playground_mujoco_dds_launcher_test", source_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load launcher from {source_path}")
@@ -264,8 +264,8 @@ class TestG1MujocoDdsServer(unittest.TestCase):
 
     def test_runtime_has_no_external_simulator_or_subprocess_dependency(self):
         for relative_path in (
-            "g1_playground/simulation/g1_mujoco_dds_server.py",
-            "scripts/run_mujoco_dds_server.py",
+            "g1_playground/simulation/mujoco_dds.py",
+            "scripts/simulate.py",
         ):
             source = (REPO_ROOT / relative_path).read_text()
             with self.subTest(path=relative_path):
@@ -292,7 +292,7 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
                 captured["endpoint"] = endpoint
                 captured["bridge"] = self
 
-        native = SimpleNamespace(G1DdsSimServer=NativeBridge, DdsLowStateSnapshot=LowStateSnapshot)
+        native = SimpleNamespace(G1DdsRobotEndpoint=NativeBridge, DdsLowStateSnapshot=LowStateSnapshot)
 
         backend = FakeBackend()
 

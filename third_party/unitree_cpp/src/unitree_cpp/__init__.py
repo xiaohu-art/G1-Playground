@@ -1,6 +1,6 @@
 from typing import List
 
-from .unitree_cpp import DdsLowStateSnapshot, G1DdsSimServer, UnitreeController
+from .unitree_cpp import DdsLowStateSnapshot, G1DdsControlEndpoint, G1DdsRobotEndpoint
 from .unitree_cpp import ImuState as _ImuState
 from .unitree_cpp import MotorState as _MotorState
 from .unitree_cpp import RobotState as _RobotState

@@ -7,7 +7,7 @@ from omegaconf import DictConfig
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = REPO_ROOT / "configs"
-PIPELINE_LAUNCHER = REPO_ROOT / "scripts/run_pipeline.py"
+PIPELINE_LAUNCHER = REPO_ROOT / "scripts/pipeline.py"
 
 
 def compose_config(deployment: str = "sim", *overrides: str, return_hydra_config: bool = False) -> DictConfig:
@@ -25,7 +25,7 @@ def asset_path(path: str) -> Path:
 
 
 def load_pipeline_launcher() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("g1_playground_test_run_pipeline", PIPELINE_LAUNCHER)
+    spec = importlib.util.spec_from_file_location("g1_playground_test_pipeline", PIPELINE_LAUNCHER)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load launcher from {PIPELINE_LAUNCHER}")
     module = importlib.util.module_from_spec(spec)

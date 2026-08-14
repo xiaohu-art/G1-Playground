@@ -108,7 +108,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
                 name == "g1_playground.environment" or name.startswith("g1_playground.environment.")
                 for name in sys.modules
             )
-            assert launcher.__name__ == "g1_playground_test_run_pipeline"
+            assert launcher.__name__ == "g1_playground_test_pipeline"
 
             effective_dof = compose_dof_config(sim.robot.dof, sim.policy.dof)
             policy = UnitreeWoGaitPolicy(sim.policy, device="cpu", dof_cfg=effective_dof)
@@ -138,56 +138,59 @@ class TestDdsPhase1Domain(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_vendor_binding_passes_domain_to_channel_factory(self):
-        header = strip_cpp_comments((UNITREE_CPP_ROOT / "src/unitree_controller.hpp").read_text())
+        header = strip_cpp_comments((UNITREE_CPP_ROOT / "src/g1_dds_control_endpoint.hpp").read_text())
+        dds_utils = strip_cpp_comments((UNITREE_CPP_ROOT / "src/dds_utils.hpp").read_text())
         binding = strip_cpp_comments((UNITREE_CPP_ROOT / "src/py_binding.cpp").read_text())
-        controller = strip_cpp_comments((UNITREE_CPP_ROOT / "src/unitree_controller.cpp").read_text())
+        control_endpoint = strip_cpp_comments((UNITREE_CPP_ROOT / "src/g1_dds_control_endpoint.cpp").read_text())
         example = (UNITREE_CPP_ROOT / "example/config.py").read_text()
 
-        struct_body = re.search(r"struct\s+UnitreeConfig\s*\{(?P<body>.*?)\};", header, flags=re.DOTALL)
+        struct_body = re.search(r"struct\s+G1DdsControlEndpointConfig\s*\{(?P<body>.*?)\};", header, flags=re.DOTALL)
         self.assertIsNotNone(struct_body)
         self.assertEqual(
             re.findall(r"std::int32_t\s+domain_id\s*=\s*0\s*;", struct_body["body"]), ["std::int32_t domain_id = 0;"]
         )
 
-        self.assertEqual(binding.count('.def_readwrite("domain_id", &UnitreeConfig::domain_id)'), 1)
-        self.assertEqual(binding.count('.def("activate_commands", &UnitreeController::activate_commands)'), 1)
+        self.assertEqual(binding.count('.def_readwrite("domain_id", &G1DdsControlEndpointConfig::domain_id)'), 1)
+        self.assertEqual(binding.count('.def("activate_commands", &G1DdsControlEndpoint::activate_commands)'), 1)
         self.assertEqual(
-            binding.count('.def_property_readonly("lifecycle_state", &UnitreeController::lifecycle_state)'), 1
+            binding.count('.def_property_readonly("lifecycle_state", &G1DdsControlEndpoint::lifecycle_state)'), 1
         )
-        unitree_controller_binding = binding.split("void bind_UnitreeController", 1)[1]
-        dict_constructor = unitree_controller_binding.split(".def(py::init([](py::dict cfg_dict) {", 1)[1].split(
-            "return new UnitreeController(cfg);", 1
+        control_endpoint_binding = binding.split("void bind_G1DdsControlEndpoint", 1)[1]
+        dict_constructor = control_endpoint_binding.split(".def(py::init([](py::dict cfg_dict) {", 1)[1].split(
+            "return new G1DdsControlEndpoint(cfg);", 1
         )[0]
         self.assertEqual(dict_constructor.count('cfg.domain_id = cfg_dict["domain_id"].cast<std::int32_t>();'), 1)
 
-        controller_constructor = controller.split("UnitreeController::UnitreeController", 1)[1].split(
-            "UnitreeController::~UnitreeController", 1
+        endpoint_constructor = control_endpoint.split("G1DdsControlEndpoint::G1DdsControlEndpoint", 1)[1].split(
+            "G1DdsControlEndpoint::~G1DdsControlEndpoint", 1
         )[0]
-        self.assertIn("InitChannelFactoryOnce(cfg_)", controller_constructor)
+        self.assertIn("InitChannelFactoryOnce(cfg_)", endpoint_constructor)
         self.assertLess(
-            controller_constructor.index("InitChannelFactoryOnce(cfg_)"),
-            controller_constructor.index("InitializeObserver()"),
+            endpoint_constructor.index("InitChannelFactoryOnce(cfg_)"),
+            endpoint_constructor.index("InitializeObserver()"),
         )
-        self.assertNotIn("MotionSwitcherClient", controller_constructor)
-        self.assertNotIn("lowcmd_publisher_", controller_constructor)
+        self.assertNotIn("MotionSwitcherClient", endpoint_constructor)
+        self.assertNotIn("lowcmd_publisher_", endpoint_constructor)
 
-        command_transport = controller.split("void UnitreeController::InitializeCommandTransport()", 1)[1].split(
-            "bool UnitreeController::activate_commands()", 1
-        )[0]
+        command_transport = control_endpoint.split("void G1DdsControlEndpoint::InitializeCommandTransport()", 1)[
+            1
+        ].split("bool G1DdsControlEndpoint::activate_commands()", 1)[0]
         self.assertIn("MotionSwitcherClient", command_transport)
         self.assertIn("lowcmd_publisher_", command_transport)
-        activate_commands = controller.split("bool UnitreeController::activate_commands()", 1)[1].split(
-            "UnitreeController::lifecycle_state", 1
+        activate_commands = control_endpoint.split("bool G1DdsControlEndpoint::activate_commands()", 1)[1].split(
+            "G1DdsControlEndpoint::lifecycle_state", 1
         )[0]
         self.assertIn("InitializeCommandTransport()", activate_commands)
-        all_init_calls = re.findall(r"ChannelFactory::Instance\(\)->Init\((.*?)\)\s*;", header, re.DOTALL)
+        all_init_calls = re.findall(r"ChannelFactory::Instance\(\)->Init\((.*?)\)\s*;", dds_utils, re.DOTALL)
         self.assertEqual([re.sub(r"\s+", "", call) for call in all_init_calls], ["selected_domain,selected_if"])
-        self.assertIn("InitializeDdsEndpointOnce(cfg.domain_id, cfg.net_if)", controller)
-        self.assertNotIn("ChannelFactory::Instance()->Release", controller)
+        self.assertIn("InitializeDdsEndpointOnce(cfg.domain_id, cfg.net_if)", control_endpoint)
+        self.assertNotIn("ChannelFactory::Instance()->Release", control_endpoint)
 
         example_tree = ast.parse(example)
         unitree_class = next(
-            node for node in example_tree.body if isinstance(node, ast.ClassDef) and node.name == "UnitreeConfig"
+            node
+            for node in example_tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "G1DdsControlEndpointConfig"
         )
         domain_assignments = [
             node
@@ -202,7 +205,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
         self.assertIs(type(domain_assignment.value.value), int)
         self.assertEqual(domain_assignment.value.value, 0)
 
-        consumed_keys = re.findall(r'cfg_dict\["([a-z_]+)"\]', unitree_controller_binding)
+        consumed_keys = re.findall(r'cfg_dict\["([a-z_]+)"\]', control_endpoint_binding)
         self.assertEqual(consumed_keys.count("domain_id"), 1)
 
 

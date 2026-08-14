@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from omegaconf import DictConfig
-from unitree_cpp import UnitreeController
+from unitree_cpp import G1DdsControlEndpoint
 
 logger = logging.getLogger(__name__)
 
@@ -37,17 +37,6 @@ class G1Env:
         motion_switcher_required: bool,
         dof_cfg: DictConfig,
     ):
-        if (
-            isinstance(control_dt, bool)
-            or not isinstance(control_dt, int | float)
-            or not np.isfinite(control_dt)
-            or control_dt <= 0
-        ):
-            raise ValueError("G1Env control_dt must be finite and positive")
-        if type(domain_id) is not int or domain_id < 0:
-            raise ValueError("G1Env domain_id must be a non-negative integer")
-        if not isinstance(net_if, str) or not net_if or net_if.strip() != net_if:
-            raise ValueError("G1Env net_if must be a non-empty interface name without surrounding whitespace")
 
         joint_names = list(dof_cfg.joint_names)
         self.num_dofs = len(joint_names)
@@ -60,7 +49,7 @@ class G1Env:
 
         self.control_dt = float(control_dt)
         self.remote_controller_handler = None
-        self.unitree = UnitreeController(
+        self.control_endpoint = G1DdsControlEndpoint(
             {
                 "domain_id": domain_id,
                 "net_if": net_if,
@@ -80,18 +69,18 @@ class G1Env:
         )
 
     def activate_commands(self) -> bool:
-        return self.unitree.activate_commands()
+        return self.control_endpoint.activate_commands()
 
     def self_check(self) -> None:
         for _ in range(30):
-            if self.unitree.self_check():
+            if self.control_endpoint.self_check():
                 logger.info("G1Env self check passed")
                 return
             time.sleep(0.1)
         raise RuntimeError("G1Env self check failed: no valid LowState received")
 
     def read(self) -> G1State:
-        robot_state = self.unitree.get_robot_state()
+        robot_state = self.control_endpoint.get_robot_state()
         state = G1State(
             dof_pos=snapshot(robot_state.motor_state.q),
             dof_vel=snapshot(robot_state.motor_state.dq),
@@ -103,7 +92,7 @@ class G1Env:
         return state
 
     def step(self, pd_target) -> None:
-        self.unitree.step(np.asarray(pd_target).tolist())
+        self.control_endpoint.step(np.asarray(pd_target).tolist())
 
     def shutdown(self) -> None:
-        self.unitree.shutdown()
+        self.control_endpoint.shutdown()

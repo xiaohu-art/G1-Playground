@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-Usage: scripts/sync_unitree_wifi.sh [--apply] [--no-delete]
+Usage: scripts/setup/sync_unitree_wifi.sh [--apply] [--no-delete]
 
 Mirror this G1-Playground checkout to unitree-wifi:~/G1-Playground/.
 
@@ -45,7 +45,7 @@ command -v rsync >/dev/null 2>&1 || {
 }
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-repo_root="$(cd -- "$script_dir/.." && pwd)"
+repo_root="$(cd -- "$script_dir/../.." && pwd)"
 remote="unitree-wifi"
 destination="~/G1-Playground/"
 

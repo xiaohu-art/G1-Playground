@@ -4,8 +4,8 @@
 #include <cstdint>
 #include <limits>
 
-#include "dds_sim_server.hpp"
-#include "unitree_controller.hpp"
+#include "g1_dds_robot_endpoint.hpp"
+#include "dds_utils.hpp"
 
 using unitree_cpp_detail::DdsCommandValidation;
 

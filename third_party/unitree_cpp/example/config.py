@@ -6,7 +6,7 @@ class Config(BaseModel):
     def to_dict(self):
         return self.model_dump()
 
-class UnitreeConfig(Config):
+class G1DdsControlEndpointConfig(Config):
     net_if: str = "eth0"
     domain_id: int = 0
     control_dt: float = 0.02
@@ -24,7 +24,7 @@ class UnitreeConfig(Config):
 
 # Config for G1 robot
 class RobotConfig(Config):
-    unitree: UnitreeConfig = UnitreeConfig()
+    unitree: G1DdsControlEndpointConfig = G1DdsControlEndpointConfig()
 
     odometry_type:str = "UNITREE"
 

@@ -50,6 +50,7 @@ def step(env, controller, policy, *, send_command: bool = True) -> bool:
     return True
 
 
+@hydra.main(version_base=None, config_path="../configs", config_name="run_pipeline")
 def run(cfg: DictConfig) -> None:
     setup_logger()
     env = None
@@ -124,10 +125,5 @@ def run(cfg: DictConfig) -> None:
             env.shutdown()
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="run_pipeline")
-def main(cfg: DictConfig) -> None:
-    run(cfg)
-
-
 if __name__ == "__main__":
-    main()
+    run()

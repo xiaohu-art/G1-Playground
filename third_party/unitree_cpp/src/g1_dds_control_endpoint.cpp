@@ -1,4 +1,4 @@
-#include "unitree_controller.hpp"
+#include "g1_dds_control_endpoint.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -12,7 +12,7 @@ using SteadyClock = std::chrono::steady_clock;
 
 namespace {
 
-bool InitChannelFactoryOnce(const UnitreeConfig& cfg) {
+bool InitChannelFactoryOnce(const G1DdsControlEndpointConfig& cfg) {
     return unitree_cpp_detail::InitializeDdsEndpointOnce(cfg.domain_id, cfg.net_if);
 }
 
@@ -20,7 +20,7 @@ std::int64_t NowNanoseconds() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(SteadyClock::now().time_since_epoch()).count();
 }
 
-double ControllerTimeout(const UnitreeConfig& cfg) {
+double ControlEndpointTimeout(const G1DdsControlEndpointConfig& cfg) {
     return std::max(5.0 * cfg.control_dt, 0.1);
 }
 
@@ -61,7 +61,7 @@ bool unitree_cpp_detail::IsFreshTimestamp(
     return std::isfinite(age_seconds) && age_seconds >= 0 && age_seconds <= timeout_seconds;
 }
 
-UnitreeController::UnitreeController(const UnitreeConfig& cfg)
+G1DdsControlEndpoint::G1DdsControlEndpoint(const G1DdsControlEndpointConfig& cfg)
     : cfg_(cfg),
       stiffness_(cfg.stiffness),
       damping_(cfg.damping),
@@ -70,7 +70,7 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
     if (!std::isfinite(cfg_.control_dt) || cfg_.control_dt <= 0 || num_dofs_ != 29 ||
         stiffness_.size() != num_dofs_ || damping_.size() != num_dofs_ || !AllRepresentableAsFloat(stiffness_) ||
         !AllRepresentableAsFloat(damping_)) {
-        throw std::invalid_argument("UnitreeController requires finite 29-DoF gains and a positive control_dt");
+        throw std::invalid_argument("G1DdsControlEndpoint requires finite 29-DoF gains and a positive control_dt");
     }
     if (cfg.hand_type == "Dex-3") {
         num_dofs_hand_ = 7;
@@ -82,7 +82,7 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
 
     const bool initialized_endpoint = InitChannelFactoryOnce(cfg_);
     std::cout << cfg.hand_type << " hand with " << num_dofs_hand_ << " DOFs." << std::endl;
-    std::cout << "UnitreeController " << (initialized_endpoint ? "initialized" : "reused") << " DDS domain " << cfg_.domain_id
+    std::cout << "G1DdsControlEndpoint " << (initialized_endpoint ? "initialized" : "reused") << " DDS domain " << cfg_.domain_id
               << " on network interface: " << cfg_.net_if << std::endl;
 
     try {
@@ -93,28 +93,28 @@ UnitreeController::UnitreeController(const UnitreeConfig& cfg)
     }
 }
 
-UnitreeController::~UnitreeController() {
+G1DdsControlEndpoint::~G1DdsControlEndpoint() {
     try {
-        lifecycle_.CloseOnce([this](unitree_cpp_detail::ControllerState) { CloseTransportNoexcept(); });
+        lifecycle_.CloseOnce([this](unitree_cpp_detail::DdsControlEndpointState) { CloseTransportNoexcept(); });
     } catch (...) {
         CloseTransportNoexcept();
     }
 }
 
-void UnitreeController::InitializeObserver() {
+void G1DdsControlEndpoint::InitializeObserver() {
     lowstate_subscriber_.reset(new ChannelSubscriber<LowState_>(cfg_.lowstate_topic));
-    lowstate_subscriber_->InitChannel(std::bind(&UnitreeController::LowStateHandler, this, std::placeholders::_1), 1);
+    lowstate_subscriber_->InitChannel(std::bind(&G1DdsControlEndpoint::LowStateHandler, this, std::placeholders::_1), 1);
 
     if (cfg_.enable_odometry) {
         std::cout << "Odometry enabled, subscribing to sport state topic: " << cfg_.sport_state_topic << std::endl;
         estimate_state_subscriber.reset(new ChannelSubscriber<SportModeState_>(cfg_.sport_state_topic));
-        estimate_state_subscriber->InitChannel(std::bind(&UnitreeController::SportStateHandler, this, std::placeholders::_1), 1);
+        estimate_state_subscriber->InitChannel(std::bind(&G1DdsControlEndpoint::SportStateHandler, this, std::placeholders::_1), 1);
     } else {
         std::cout << "Odometry disabled." << std::endl;
     }
 }
 
-void UnitreeController::InitializeCommandTransport() {
+void G1DdsControlEndpoint::InitializeCommandTransport() {
     try {
         if (cfg_.motion_switcher_required) {
             msc_ = std::make_shared<unitree::robot::b2::MotionSwitcherClient>();
@@ -156,7 +156,7 @@ void UnitreeController::InitializeCommandTransport() {
         lowcmd_publisher_.reset(new ChannelPublisher<LowCmd_>(cfg_.lowcmd_topic));  // TODO: switch Cmd Type
         lowcmd_publisher_->InitChannel();
         command_writer_ptr_ = CreateRecurrentThreadEx(
-            "command_writer", UT_CPU_ID_NONE, uint(cfg_.control_dt * 1e6), &UnitreeController::LowCommandWriter, this);
+            "command_writer", UT_CPU_ID_NONE, uint(cfg_.control_dt * 1e6), &G1DdsControlEndpoint::LowCommandWriter, this);
 
         if (num_dofs_hand_ > 0) {
             handcmd_left_publisher_.reset(new ChannelPublisher<HandCmd_>("rt/dex3/left/cmd"));
@@ -164,7 +164,7 @@ void UnitreeController::InitializeCommandTransport() {
             handcmd_right_publisher_.reset(new ChannelPublisher<HandCmd_>("rt/dex3/right/cmd"));
             handcmd_right_publisher_->InitChannel();
             handcmd_writer_ptr_ = CreateRecurrentThreadEx(
-                "handcmd_writer", UT_CPU_ID_NONE, uint(cfg_.control_dt * 1e6 * 5), &UnitreeController::HandCommandWriter, this);
+                "handcmd_writer", UT_CPU_ID_NONE, uint(cfg_.control_dt * 1e6 * 5), &G1DdsControlEndpoint::HandCommandWriter, this);
         }
     } catch (...) {
         CloseCommandTransportNoexcept();
@@ -172,17 +172,17 @@ void UnitreeController::InitializeCommandTransport() {
     }
 }
 
-bool UnitreeController::activate_commands() {
+bool G1DdsControlEndpoint::activate_commands() {
     return lifecycle_.ActivateOnce([this]() { InitializeCommandTransport(); });
 }
 
-unitree_cpp_detail::ControllerState UnitreeController::lifecycle_state() const {
+unitree_cpp_detail::DdsControlEndpointState G1DdsControlEndpoint::lifecycle_state() const {
     return lifecycle_.state();
 }
 
-bool UnitreeController::self_check() {
-    if (lifecycle_.state() == unitree_cpp_detail::ControllerState::CLOSED) {
-        std::cerr << "UnitreeController is closed." << std::endl;
+bool G1DdsControlEndpoint::self_check() {
+    if (lifecycle_.state() == unitree_cpp_detail::DdsControlEndpointState::CLOSED) {
+        std::cerr << "G1DdsControlEndpoint is closed." << std::endl;
         return false;
     }
     try {
@@ -202,11 +202,11 @@ bool UnitreeController::self_check() {
         std::cerr << "No data available: " << e.what() << std::endl;
         return false;
     }
-    std::cout << "UnitreeController self-check passed." << std::endl;
+    std::cout << "G1DdsControlEndpoint self-check passed." << std::endl;
     return true;
 }
 
-void UnitreeController::LowStateHandler(const void* message) {
+void G1DdsControlEndpoint::LowStateHandler(const void* message) {
     LowState_ low_state = *(const LowState_*)message;
     // std::cout << "LowState received: " << low_state.tick() << std::endl;
     if (low_state.crc() != unitree_cpp_detail::Crc32Core(
@@ -257,7 +257,7 @@ void UnitreeController::LowStateHandler(const void* message) {
     robot_state_buffer_.SetData(robot_state_tmp);
 }
 
-void UnitreeController::SportStateHandler(const void* message) {
+void G1DdsControlEndpoint::SportStateHandler(const void* message) {
     SportModeState_ estimator_state = *(const SportModeState_*)message;
 
     SportState sport_state_tmp;
@@ -266,7 +266,7 @@ void UnitreeController::SportStateHandler(const void* message) {
     sport_state_buffer_.SetData(sport_state_tmp);
 }
 
-void UnitreeController::StopCommandWritersNoexcept() noexcept {
+void G1DdsControlEndpoint::StopCommandWritersNoexcept() noexcept {
     const auto stop_thread = [](ThreadPtr& thread) {
         if (!thread) {
             return;
@@ -282,7 +282,7 @@ void UnitreeController::StopCommandWritersNoexcept() noexcept {
     stop_thread(command_writer_ptr_);
 }
 
-void UnitreeController::CloseCommandTransportNoexcept() noexcept {
+void G1DdsControlEndpoint::CloseCommandTransportNoexcept() noexcept {
     StopCommandWritersNoexcept();
 
     const auto close_publisher = [](auto& publisher) {
@@ -305,7 +305,7 @@ void UnitreeController::CloseCommandTransportNoexcept() noexcept {
     msc_.reset();
 }
 
-void UnitreeController::CloseObserverTransportNoexcept() noexcept {
+void G1DdsControlEndpoint::CloseObserverTransportNoexcept() noexcept {
     const auto close_subscriber = [](auto& subscriber) {
         if (!subscriber) {
             return;
@@ -321,17 +321,17 @@ void UnitreeController::CloseObserverTransportNoexcept() noexcept {
     close_subscriber(lowstate_subscriber_);
 }
 
-void UnitreeController::CloseTransportNoexcept() noexcept {
+void G1DdsControlEndpoint::CloseTransportNoexcept() noexcept {
     CloseCommandTransportNoexcept();
     CloseObserverTransportNoexcept();
 }
 
-void UnitreeController::LowCommandWriter() {
+void G1DdsControlEndpoint::LowCommandWriter() {
     std::lock_guard<std::mutex> write_lock(command_write_mutex_);
     LowCommandWriterLocked();
 }
 
-void UnitreeController::LowCommandWriterLocked() {
+void G1DdsControlEndpoint::LowCommandWriterLocked() {
     const std::shared_ptr<const MotorCommand> mc = motor_command_buffer_.GetData();
     if (!mc) {
         return;
@@ -372,7 +372,7 @@ void UnitreeController::LowCommandWriterLocked() {
     }
 }
 
-void UnitreeController::HandCommandWriter() {
+void G1DdsControlEndpoint::HandCommandWriter() {
     HandCmd_ dds_hand_command;
 
     dds_hand_command.motor_cmd().resize(num_dofs_hand_);
@@ -407,7 +407,7 @@ void UnitreeController::HandCommandWriter() {
     }
 }
 
-void UnitreeController::step(const std::vector<double>& actions) {
+void G1DdsControlEndpoint::step(const std::vector<double>& actions) {
     lifecycle_.RunWhileActive([this, &actions]() {
         if (actions.size() != num_dofs_) {
             throw std::runtime_error("actions size mismatch");
@@ -416,7 +416,7 @@ void UnitreeController::step(const std::vector<double>& actions) {
             throw std::invalid_argument("actions must contain values representable by the DDS float wire type");
         }
         if (command_watchdog_fired_.load()) {
-            throw std::runtime_error("UnitreeController command watchdog expired");
+            throw std::runtime_error("G1DdsControlEndpoint command watchdog expired");
         }
 
         MotorCommand motor_command_tmp(num_dofs_);
@@ -441,7 +441,7 @@ void UnitreeController::step(const std::vector<double>& actions) {
     });
 }
 
-void UnitreeController::step_hands(const std::vector<double>& l_hand_pose, const std::vector<double>& r_hand_pose) {
+void G1DdsControlEndpoint::step_hands(const std::vector<double>& l_hand_pose, const std::vector<double>& r_hand_pose) {
     lifecycle_.RunWhileActive([this, &l_hand_pose, &r_hand_pose]() {
         if (num_dofs_hand_ == 0) {
             throw std::logic_error("hand command transport is disabled");
@@ -473,7 +473,7 @@ void UnitreeController::step_hands(const std::vector<double>& l_hand_pose, const
     });
 }
 
-void UnitreeController::set_gains(const std::vector<double>& stiffness, const std::vector<double>& damping) {
+void G1DdsControlEndpoint::set_gains(const std::vector<double>& stiffness, const std::vector<double>& damping) {
     lifecycle_.RunWhileOpen([this, &stiffness, &damping]() {
         if (stiffness.size() != num_dofs_ || damping.size() != num_dofs_) {
             throw std::runtime_error("stiffness or damping size mismatch");
@@ -496,7 +496,7 @@ void UnitreeController::set_gains(const std::vector<double>& stiffness, const st
     });
 }
 
-void UnitreeController::SendDampingCommand() {
+void G1DdsControlEndpoint::SendDampingCommand() {
     LowCmd_ dds_low_command{};
     dds_low_command.mode_pr() = static_cast<uint8_t>(mode_pr_);
     const std::shared_ptr<const RobotState> robot_state = robot_state_buffer_.GetData();
@@ -518,44 +518,44 @@ void UnitreeController::SendDampingCommand() {
     }
 }
 
-void UnitreeController::WriteMotorCommand(const MotorCommand& command) {
+void G1DdsControlEndpoint::WriteMotorCommand(const MotorCommand& command) {
     std::lock_guard<std::mutex> write_lock(command_write_mutex_);
     if (command_watchdog_fired_.load()) {
-        throw std::runtime_error("UnitreeController command watchdog expired");
+        throw std::runtime_error("G1DdsControlEndpoint command watchdog expired");
     }
     motor_command_buffer_.SetData(command);
     last_command_time_ns_.store(NowNanoseconds());
     LowCommandWriterLocked();
 }
 
-bool UnitreeController::CommandExpired() const {
+bool G1DdsControlEndpoint::CommandExpired() const {
     const auto last_command_time = last_command_time_ns_.load();
     if (last_command_time == 0) {
         return false;
     }
     const double age_seconds = static_cast<double>(NowNanoseconds() - last_command_time) / 1e9;
-    return age_seconds > ControllerTimeout(cfg_);
+    return age_seconds > ControlEndpointTimeout(cfg_);
 }
 
-bool UnitreeController::HasFreshRobotState() const {
+bool G1DdsControlEndpoint::HasFreshRobotState() const {
     const std::shared_ptr<const RobotState> state = robot_state_buffer_.GetData();
     return state && unitree_cpp_detail::IsValidLowStateCandidate(*state, nullptr, 5) &&
-           unitree_cpp_detail::IsFreshTimestamp(state->received_at, SteadyClock::now(), ControllerTimeout(cfg_));
+           unitree_cpp_detail::IsFreshTimestamp(state->received_at, SteadyClock::now(), ControlEndpointTimeout(cfg_));
 }
 
-void UnitreeController::ValidateRobotState(const RobotState& state) const {
+void G1DdsControlEndpoint::ValidateRobotState(const RobotState& state) const {
     if (!unitree_cpp_detail::IsValidLowStateCandidate(state, nullptr, 5)) {
         throw std::runtime_error("Low state data is invalid");
     }
-    if (!unitree_cpp_detail::IsFreshTimestamp(state.received_at, SteadyClock::now(), ControllerTimeout(cfg_))) {
+    if (!unitree_cpp_detail::IsFreshTimestamp(state.received_at, SteadyClock::now(), ControlEndpointTimeout(cfg_))) {
         throw std::runtime_error("Low state data is stale");
     }
 }
 
-void UnitreeController::shutdown() {
-    lifecycle_.CloseOnce([this](unitree_cpp_detail::ControllerState previous_state) {
-        std::cout << "Shutting down UnitreeController..." << std::endl;
-        if (previous_state == unitree_cpp_detail::ControllerState::ACTIVE) {
+void G1DdsControlEndpoint::shutdown() {
+    lifecycle_.CloseOnce([this](unitree_cpp_detail::DdsControlEndpointState previous_state) {
+        std::cout << "Shutting down G1DdsControlEndpoint..." << std::endl;
+        if (previous_state == unitree_cpp_detail::DdsControlEndpointState::ACTIVE) {
             // Stop periodic writers before emitting the single legacy damping
             // command. Observer shutdown never enters this branch.
             StopCommandWritersNoexcept();
@@ -570,7 +570,7 @@ void UnitreeController::shutdown() {
     });
 }
 
-RobotState UnitreeController::get_robot_state() {
+RobotState G1DdsControlEndpoint::get_robot_state() {
     const std::shared_ptr<const RobotState> robot_state = robot_state_buffer_.GetData();
 
     if (robot_state) {
@@ -581,7 +581,7 @@ RobotState UnitreeController::get_robot_state() {
     }
 }
 
-SportState UnitreeController::get_sport_state() {
+SportState G1DdsControlEndpoint::get_sport_state() {
     const std::shared_ptr<const SportState> sport_state = sport_state_buffer_.GetData();
 
     if (sport_state) {
@@ -592,8 +592,8 @@ SportState UnitreeController::get_sport_state() {
 }
 
 int main(int argc, char const* argv[]) {
-    // Example usage of UnitreeController
-    UnitreeConfig config;
+    // Example usage of G1DdsControlEndpoint
+    G1DdsControlEndpointConfig config;
     config.net_if = "enp13s0";
     config.domain_id = 0;
     config.control_dt = 0.1;
@@ -608,7 +608,7 @@ int main(int argc, char const* argv[]) {
     config.damping = {0.1, 0.1, 0.1};    // Example damping values
     config.num_dofs = 3;                 // Example number of DOFs
 
-    UnitreeController controller(config);
+    G1DdsControlEndpoint control_endpoint(config);
 
     while (true)
         sleep(10);

@@ -78,6 +78,16 @@ class TestDdsPhase2EvidenceBoundary(unittest.TestCase):
         self.assertEqual(changes, vendor["allowed_changes"])
         self.assertEqual(set(phase2_snapshot), set(baseline))
         self.assertEqual(phase3_boundary["vendor"]["phase2_closure"]["file_count"], len(baseline))
+        self.assertEqual(
+            {path: phase2_snapshot[path] for path in ("src/unitree_controller.cpp", "src/unitree_controller.hpp")},
+            {
+                "src/unitree_controller.cpp": "dacd8ded67e13323c81c9135aef228de9c51783b2bac0e6c8fdea4b605e60117",
+                "src/unitree_controller.hpp": "5497d917932993c49a54ead4dcb36ad18aa4f7670f6a02fbda33e27e4f2282f3",
+            },
+        )
+        self.assertTrue(
+            {"src/g1_dds_control_endpoint.cpp", "src/g1_dds_control_endpoint.hpp"}.isdisjoint(phase2_snapshot)
+        )
 
     def test_phase2_live_gate_rejects_unapproved_difference_types(self):
         vendor = self.boundary["vendor"]
@@ -131,17 +141,17 @@ class TestDdsPhase2NativeLifecycle(unittest.TestCase):
             #include <thread>
             #include <vector>
 
-            #include "unitree_controller.hpp"
+            #include "g1_dds_control_endpoint.hpp"
 
-            using unitree_cpp_detail::ControllerLifecycle;
-            using unitree_cpp_detail::ControllerState;
+            using unitree_cpp_detail::DdsControlEndpointLifecycle;
+            using unitree_cpp_detail::DdsControlEndpointState;
 
             int main() {
-                ControllerLifecycle observer;
+                DdsControlEndpointLifecycle observer;
                 int activate_side_effects = 0;
                 int command_writes = 0;
                 int receiving_close_writes = 0;
-                assert(observer.state() == ControllerState::RECEIVING);
+                assert(observer.state() == DdsControlEndpointState::RECEIVING);
 
                 bool command_rejected = false;
                 try {
@@ -152,14 +162,14 @@ class TestDdsPhase2NativeLifecycle(unittest.TestCase):
                 assert(command_rejected);
                 assert(command_writes == 0);
 
-                assert(observer.CloseOnce([&](ControllerState previous) {
-                    assert(previous == ControllerState::RECEIVING);
-                    if (previous == ControllerState::ACTIVE) {
+                assert(observer.CloseOnce([&](DdsControlEndpointState previous) {
+                    assert(previous == DdsControlEndpointState::RECEIVING);
+                    if (previous == DdsControlEndpointState::ACTIVE) {
                         ++receiving_close_writes;
                     }
                 }));
-                assert(observer.state() == ControllerState::CLOSED);
-                assert(!observer.CloseOnce([&](ControllerState) { ++receiving_close_writes; }));
+                assert(observer.state() == DdsControlEndpointState::CLOSED);
+                assert(!observer.CloseOnce([&](DdsControlEndpointState) { ++receiving_close_writes; }));
                 assert(activate_side_effects == 0);
                 assert(command_writes == 0);
                 assert(receiving_close_writes == 0);
@@ -173,7 +183,7 @@ class TestDdsPhase2NativeLifecycle(unittest.TestCase):
                 assert(closed_activation_rejected);
                 assert(activate_side_effects == 0);
 
-                ControllerLifecycle retryable;
+                DdsControlEndpointLifecycle retryable;
                 bool failed = false;
                 try {
                     retryable.ActivateOnce([]() { throw std::runtime_error("injected activation failure"); });
@@ -181,22 +191,22 @@ class TestDdsPhase2NativeLifecycle(unittest.TestCase):
                     failed = true;
                 }
                 assert(failed);
-                assert(retryable.state() == ControllerState::RECEIVING);
+                assert(retryable.state() == DdsControlEndpointState::RECEIVING);
 
-                ControllerLifecycle active;
+                DdsControlEndpointLifecycle active;
                 assert(active.ActivateOnce([&]() { ++activate_side_effects; }));
-                assert(active.state() == ControllerState::ACTIVE);
+                assert(active.state() == DdsControlEndpointState::ACTIVE);
                 assert(!active.ActivateOnce([&]() { ++activate_side_effects; }));
                 active.RunWhileActive([&]() { ++command_writes; });
                 assert(activate_side_effects == 1);
                 assert(command_writes == 1);
-                assert(active.CloseOnce([&](ControllerState previous) {
-                    assert(previous == ControllerState::ACTIVE);
+                assert(active.CloseOnce([&](DdsControlEndpointState previous) {
+                    assert(previous == DdsControlEndpointState::ACTIVE);
                     ++command_writes;
                 }));
                 assert(command_writes == 2);
 
-                ControllerLifecycle concurrent;
+                DdsControlEndpointLifecycle concurrent;
                 std::atomic<int> concurrent_activations{0};
                 std::atomic<int> first_callers{0};
                 std::vector<std::thread> threads;
@@ -242,8 +252,8 @@ class TestDdsPhase2NativeLifecycle(unittest.TestCase):
             run_result = subprocess.run([binary_path], capture_output=True, text=True, timeout=10)
             self.assertEqual(run_result.returncode, 0, run_result.stderr)
 
-    def test_controller_routes_side_effects_through_activation(self):
-        source_path = REPO_ROOT / "third_party/unitree_cpp/src/unitree_controller.cpp"
+    def test_control_endpoint_routes_side_effects_through_activation(self):
+        source_path = REPO_ROOT / "third_party/unitree_cpp/src/g1_dds_control_endpoint.cpp"
         source = source_path.read_text()
 
         def function_body(signature: str) -> str:
@@ -259,10 +269,10 @@ class TestDdsPhase2NativeLifecycle(unittest.TestCase):
                         return source[opening_brace + 1 : index]
             self.fail(f"unterminated function: {signature}")
 
-        constructor = function_body("UnitreeController::UnitreeController")
-        activation = function_body("void UnitreeController::InitializeCommandTransport")
-        activate_commands = function_body("bool UnitreeController::activate_commands")
-        observer = function_body("void UnitreeController::InitializeObserver")
+        constructor = function_body("G1DdsControlEndpoint::G1DdsControlEndpoint")
+        activation = function_body("void G1DdsControlEndpoint::InitializeCommandTransport")
+        activate_commands = function_body("bool G1DdsControlEndpoint::activate_commands")
+        observer = function_body("void G1DdsControlEndpoint::InitializeObserver")
 
         for forbidden in (
             "MotionSwitcherClient",
@@ -287,7 +297,7 @@ class TestDdsPhase2PythonActivation(unittest.TestCase):
         self.old_binding = sys.modules.get("unitree_cpp", self.missing)
         self.old_module = sys.modules.pop(self.module_name, None)
 
-        class FakeUnitreeController:
+        class FakeG1DdsControlEndpoint:
             instances = []
 
             def __init__(fake_self, cfg):
@@ -313,7 +323,7 @@ class TestDdsPhase2PythonActivation(unittest.TestCase):
             def activate_commands(fake_self):
                 fake_self.events.append("activate_commands")
                 if fake_self.lifecycle == "closed":
-                    raise RuntimeError("cannot activate a closed UnitreeController")
+                    raise RuntimeError("cannot activate a closed G1DdsControlEndpoint")
                 if fake_self.lifecycle == "active":
                     return False
                 fake_self.lifecycle = "active"
@@ -322,7 +332,7 @@ class TestDdsPhase2PythonActivation(unittest.TestCase):
 
             def step(fake_self, target):
                 if fake_self.lifecycle != "active":
-                    raise RuntimeError("UnitreeController command transport is not active")
+                    raise RuntimeError("G1DdsControlEndpoint command transport is not active")
                 fake_self.events.append("step")
                 fake_self.command_writes += 1
 
@@ -336,10 +346,10 @@ class TestDdsPhase2PythonActivation(unittest.TestCase):
                 fake_self.lifecycle = "closed"
                 fake_self.events.append("shutdown_effect")
 
-        self.fake_controller = FakeUnitreeController
+        self.fake_controller = FakeG1DdsControlEndpoint
         fake_binding = types.ModuleType("unitree_cpp")
         fake_binding.RobotState = SimpleNamespace
-        fake_binding.UnitreeController = FakeUnitreeController
+        fake_binding.G1DdsControlEndpoint = FakeG1DdsControlEndpoint
         sys.modules["unitree_cpp"] = fake_binding
         environment_module = importlib.import_module(self.module_name)
         self.env_class = environment_module.G1Env
@@ -384,19 +394,33 @@ class TestDdsPhase2PythonActivation(unittest.TestCase):
                 self.assertNotIn("self_check", self.fake_controller.instances[-1].events)
                 env.shutdown()
 
-    def test_endpoint_contract_rejects_malformed_values_before_native_construction(self):
-        invalid_parameters = (
-            {"domain_id": -1},
-            {"domain_id": True},
-            {"net_if": " badnic"},
-            {"control_dt": 0},
+    def test_endpoint_contract_delegates_validation_to_native_owner(self):
+        instances_before = len(self.fake_controller.instances)
+        env = self.make_env(
+            domain_id=-1,
+            net_if="native-owner-if",
+            lowcmd_topic="custom/lowcmd",
+            lowstate_topic="custom/lowstate",
+            control_dt=0.0,
         )
-        for overrides in invalid_parameters:
-            with self.subTest(overrides=overrides):
-                instances_before = len(self.fake_controller.instances)
-                with self.assertRaises(ValueError):
-                    self.make_env(**overrides)
-                self.assertEqual(len(self.fake_controller.instances), instances_before)
+        try:
+            self.assertEqual(len(self.fake_controller.instances), instances_before + 1)
+            native_cfg = self.fake_controller.instances[-1].cfg
+            self.assertEqual(
+                {
+                    key: native_cfg[key]
+                    for key in ("domain_id", "net_if", "lowcmd_topic", "lowstate_topic", "control_dt")
+                },
+                {
+                    "domain_id": -1,
+                    "net_if": "native-owner-if",
+                    "lowcmd_topic": "custom/lowcmd",
+                    "lowstate_topic": "custom/lowstate",
+                    "control_dt": 0.0,
+                },
+            )
+        finally:
+            env.shutdown()
 
     def test_read_returns_one_detached_read_only_g1_state(self):
         env = self.make_env()
