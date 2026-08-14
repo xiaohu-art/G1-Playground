@@ -34,7 +34,9 @@ class UnitreeCppEnv():
         self._imu_linear_velocity = np.zeros(3)
         self._base_pos = np.array([0.0, 0.0, 0.9])
 
-        self.self_check()
+        if not self.self_check():
+            raise RuntimeError("UnitreeCppEnv self check failed")
+        self.unitree.activate_commands()
 
     def self_check(self):
         for _ in range(30):
@@ -109,4 +111,3 @@ if __name__ == "__main__":
 
     env.shutdown()
     print("Shutdown successfully!")
-

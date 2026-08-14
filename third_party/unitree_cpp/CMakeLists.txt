@@ -36,6 +36,7 @@ message(STATUS "Found ddscxx root include: ${DDSCXX_ROOT_INCLUDE}")
 # Add a library using FindPython's tooling (pybind11 also provides a helper like
 # this)
 python_add_library(unitree_cpp MODULE
+  src/dds_sim_server.cpp
   src/py_binding.cpp 
   src/unitree_controller.cpp
   WITH_SOABI

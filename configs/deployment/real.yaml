@@ -1,0 +1,11 @@
+# @package _global_
+
+env:
+  domain_id: 0
+  net_if: enP8p1s0
+  lowcmd_topic: rt/lowcmd
+  lowstate_topic: rt/lowstate
+  motion_switcher_required: true
+
+controller:
+  _target_: g1_playground.controller.unitree_ctrl.UnitreeCtrl

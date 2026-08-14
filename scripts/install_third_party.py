@@ -5,7 +5,6 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 VENDORED_PACKAGES = {
-    "mujoco_viewer": ROOT_DIR / "third_party/mujoco_viewer",
     "unitree_cpp": ROOT_DIR / "third_party/unitree_cpp",
 }
 
@@ -16,13 +15,13 @@ def parse_args():
         "packages",
         nargs="*",
         choices=sorted(VENDORED_PACKAGES),
-        help="Packages to install; defaults to mujoco_viewer",
+        help="Packages to install; defaults to unitree_cpp",
     )
     return parser.parse_args()
 
 
 def main():
-    selected = parse_args().packages or ["mujoco_viewer"]
+    selected = parse_args().packages or ["unitree_cpp"]
     for name in selected:
         package_dir = VENDORED_PACKAGES[name]
         if not package_dir.is_dir():

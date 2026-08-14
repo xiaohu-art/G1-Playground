@@ -109,7 +109,7 @@ class TestDdsEndpointInitGuard(unittest.TestCase):
             """
         )
 
-        with tempfile.TemporaryDirectory(prefix="robojudo-dds-guard-") as temporary_dir:
+        with tempfile.TemporaryDirectory(prefix="g1-playground-dds-guard-") as temporary_dir:
             temporary_path = Path(temporary_dir)
             source_path = temporary_path / "guard_test.cpp"
             binary_path = temporary_path / "guard_test"

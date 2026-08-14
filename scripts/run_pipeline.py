@@ -1,55 +1,132 @@
+# ruff: noqa: I001
+
 import os
 import platform
 
 if platform.machine().startswith("aarch64"):
     os.environ["OMP_NUM_THREADS"] = "1"
 
-import argparse
 import logging
 import time
 
-import robojudo.pipeline
-from robojudo.config.config_manager import ConfigManager
-from robojudo.pipeline.pipeline_cfgs import RlPipelineCfg
-from robojudo.pipeline.rl_pipeline import RlPipeline
+# Run the Jetson torch-before-numpy bootstrap before anything that can import NumPy.
+import g1_playground  # noqa: F401
 
-logger = logging.getLogger("robojudo")
+import hydra
+from hydra.utils import instantiate
+from omegaconf import DictConfig
+
+from g1_playground.policy import UnitreeWoGaitPolicy
+from g1_playground.utils.dof import compose_dof_config
+from g1_playground.utils.logger import setup_logger
+from g1_playground.utils.math import is_upright
+
+logger = logging.getLogger("g1_playground")
+RAMP_SECONDS = 3.0
+BLEND_SECONDS = 5.0
+ZERO_CONTROL = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0}}
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-c", "--config", type=str, default="g1", help="Configuration name")
-    return parser.parse_args()
+def read_frame(env, controller):
+    state = env.read()
+    control, shutdown_requested = controller.read()
+    if shutdown_requested:
+        logger.warning("Emergency shutdown!")
+        return None
+    if not is_upright(state.base_quat):
+        logger.error("Robot fallen! Shutting down for safety.")
+        return None
+    return state, control
 
 
-def main():
-    args = parse_args()
-    cfg: RlPipelineCfg = ConfigManager(config_name=args.config).get_cfg()
-    pipeline_class: type[RlPipeline] = getattr(robojudo.pipeline, cfg.pipeline_type)
-    logger.info(f"Using pipeline: {cfg.pipeline_type} -> {pipeline_class}")
-    pipeline = pipeline_class(cfg=cfg)
+def step(env, controller, policy, *, send_command: bool = True) -> bool:
+    frame = read_frame(env, controller)
+    if frame is None:
+        return False
+    state, control = frame
+    target = policy.act(state, control)
+    if send_command:
+        env.step(target)
+    return True
 
-    if not cfg.env.is_sim:
-        pipeline.prepare()
 
+def run(cfg: DictConfig) -> None:
+    setup_logger()
+    env = None
     try:
-        while pipeline.running:
-            time_start = time.time()
-            pipeline.step()
-            time_diff = pipeline.dt - (time.time() - time_start)
-            if cfg.run_fullspeed:
-                continue
-            if time_diff > 0:
-                time.sleep(time_diff)
-            elif not cfg.env.is_sim:
-                logger.error(f"Warning: frame drop -> {time_diff}")
-                if time_diff < -0.2:
+        dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
+        policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+        env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
+        controller = instantiate(cfg.controller, env=env)
+
+        env.self_check()
+        for _ in range(10):
+            if not step(env, controller, policy, send_command=False):
+                return
+
+        frame = read_frame(env, controller)
+        if frame is None:
+            return
+        state, _ = frame
+        initial = state.dof_pos
+        standing = policy.standing_target
+        env.activate_commands()
+
+        logger.warning("Ramping to the policy standing pose over %.1f seconds", RAMP_SECONDS)
+        ramp_steps = int(RAMP_SECONDS * policy.freq)
+        for index in range(ramp_steps):
+            started = time.monotonic()
+            if read_frame(env, controller) is None:
+                return
+            alpha = (index + 1) / ramp_steps
+            env.step((1.0 - alpha) * initial + alpha * standing)
+            remaining = policy.dt - (time.monotonic() - started)
+            if remaining > 0:
+                time.sleep(remaining)
+            elif remaining < -policy.dt:
+                logger.warning("Control frame dropped during standing ramp")
+
+        policy.reset()
+
+        logger.warning("Blending into closed-loop locomotion over %.1f seconds", BLEND_SECONDS)
+        blend_steps = int(BLEND_SECONDS * policy.freq)
+        for index in range(blend_steps):
+            started = time.monotonic()
+            frame = read_frame(env, controller)
+            if frame is None:
+                return
+            state, _ = frame
+            policy_target = policy.act(state, ZERO_CONTROL)
+            alpha = (index + 1) / blend_steps
+            env.step((1.0 - alpha) * standing + alpha * policy_target)
+            remaining = policy.dt - (time.monotonic() - started)
+            if remaining > 0:
+                time.sleep(remaining)
+            elif remaining < -policy.dt:
+                logger.warning("Control frame dropped during policy blend")
+
+        while True:
+            started = time.monotonic()
+            if not step(env, controller, policy):
+                break
+            remaining = policy.dt - (time.monotonic() - started)
+            if remaining > 0:
+                time.sleep(remaining)
+            else:
+                logger.error("Warning: frame drop -> %s", remaining)
+                if remaining < -0.2:
                     logger.critical("Exiting due to excessive frame drop")
                     break
     except KeyboardInterrupt:
         logger.info("Interrupted by operator")
     finally:
-        pipeline.shutdown()
+        if env is not None:
+            env.shutdown()
+
+
+@hydra.main(version_base=None, config_path="../configs", config_name="run_pipeline")
+def main(cfg: DictConfig) -> None:
+    run(cfg)
 
 
 if __name__ == "__main__":

@@ -1,54 +1,71 @@
 # UnitreeWoGaitPolicy
 
-`UnitreeWoGaitPolicy` is the repository's only policy. It runs the Unitree G1 29DoF velocity controller exported from
-[unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab). The checkpoint omits a periodic gait-phase input, so
-a zero velocity command does not force the robot to continue stepping.
+[`UnitreeWoGaitPolicy`](../g1_playground/policy/unitree_policy.py) is the only policy. It runs the Unitree G1 29DoF
+velocity checkpoint from [unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab) for both DDS simulation and
+hardware.
 
-## Implementation
+## Configuration and class contract
 
-- Policy implementation: [`unitree_policy.py`](../robojudo/policy/unitree_policy.py)
-- Shared policy configuration: [`policy_cfgs.py`](../robojudo/policy/policy_cfgs.py)
-- G1 joint order and checkpoint configuration:
-  [`g1_unitree_policy_cfg.py`](../robojudo/config/g1/policy/g1_unitree_policy_cfg.py)
-- Checkpoint: `assets/models/g1/unitree/policy_wo_gait.pt`
+[`configs/policy/unitree_wo_gait.yaml`](../configs/policy/unitree_wo_gait.yaml) contains only values that vary as policy
+data:
 
-Both the `g1` simulation configuration and the `g1_real` hardware configuration select this policy.
+- checkpoint path;
+- one `dof` block with policy joint order, default position, stiffness, and damping;
+- action scale, angular/joint-velocity observation scales, and maximum commands.
 
-## Observation and Action Contract
+There is no separate observation/action DoF block. The policy constructs two `DoFAdapter`s around that single list: one
+maps runtime state into policy order and the other maps targets back into G1 runtime order. The launcher also uses the
+same `policy.dof` once to compose default position and gains for `G1Env`.
 
-Each control frame contributes 96 observation values:
+Checkpoint-shape invariants are code contracts, not tunable YAML:
 
-| Field | Size | Description |
+```python
+UnitreeWoGaitPolicy.FREQ == 50
+UnitreeWoGaitPolicy.HISTORY_LENGTH == 5
+UnitreeWoGaitPolicy.HISTORY_LAYOUT == (
+    ("ang_vel", 3),
+    ("gravity", 3),
+    ("commands", 3),
+    ("dof_pos", 29),
+    ("dof_vel", 29),
+    ("actions", 29),
+)
+```
+
+`policy.dt` is therefore `1 / 50 = 0.02` seconds and is injected into `G1Env` by the launcher. Moving frequency, history
+length, or field layout into deployment configuration would create a second source of truth for the exported model.
+
+## Observation and action
+
+Each sample has 96 values:
+
+| Field | Size | Meaning |
 | --- | ---: | --- |
-| Base angular velocity | 3 | Scaled body-frame angular velocity |
-| Projected gravity | 3 | Gravity direction in the body frame |
-| Velocity command | 3 | Forward, lateral, and yaw commands |
-| Joint position error | 29 | Current position minus the policy default pose |
-| Joint velocity | 29 | Scaled joint velocity |
-| Previous action | 29 | Previous output after optional beta smoothing, before clipping and action scaling |
+| angular velocity | 3 | scaled body angular velocity |
+| projected gravity | 3 | body-frame gravity direction |
+| velocity command | 3 | forward, lateral, yaw |
+| joint position error | 29 | policy-order position minus default position |
+| joint velocity | 29 | scaled policy-order velocity |
+| previous action | 29 | preceding raw model output |
 
-The policy stores five samples of each field, producing a 480-value model input. Packing is field-major—not five adjacent
-96-value frames: `ang_vel[5] | gravity[5] | commands[5] | dof_pos[5] | dof_vel[5] | actions[5]`. The TorchScript model
-returns 29 actions. After action scaling, the pipeline adds the policy default pose to form joint position targets.
+Five samples are packed field-major, not as five adjacent frames:
 
-The policy and environment may list joints in different orders, but both lists must contain the same 29 G1 joints. The
-pipeline adapter is used only to reorder values; missing or uncontrolled joints are not supported.
+```text
+ang_vel[5] | gravity[5] | commands[5] |
+dof_pos[5] | dof_vel[5] | actions[5] = 480 values
+```
 
-## Velocity Commands
+The TorchScript model returns 29 raw actions. `act(state, control)` stores that raw output as the next previous-action
+field, applies `action_scale`, adds the policy default position, maps the result to runtime order, and returns one
+29-position target. It does not return diagnostics or an extras dictionary. `standing_target` exposes the default pose in
+the same runtime order. Only policy history has a `reset()` lifecycle method.
 
-`JoystickCtrl` in simulation and `UnitreeCtrl` on hardware provide the same normalized axes:
+The control axes become `[LeftY, -LeftX, -RightX]`; magnitudes below `0.04` are zeroed, then values are multiplied by
+`max_cmd` (currently `0.8 m/s`, `0.5 m/s`, `1.57 rad/s`).
 
-- `LeftY`: forward and backward velocity
-- `LeftX`: lateral velocity
-- `RightX`: yaw rate
+## Model check
 
-The default maximum command magnitudes are `0.8 m/s`, `0.5 m/s`, and `1.57 rad/s`, respectively. Release both sticks to
-request zero velocity. Axis remapping and limits are defined by `UnitreeWoGaitPolicyCfg`; change them only after simulation
-validation.
-
-## Model Check
-
-Use this shape check after replacing or re-exporting the checkpoint:
+After replacing or re-exporting the checkpoint, verify its fixed shape:
 
 ```bash
 python - <<'PY'
@@ -61,5 +78,5 @@ print("checkpoint shape OK")
 PY
 ```
 
-A successful shape check does not establish safe behavior. Run the complete `g1` MuJoCo configuration and verify standing,
-zero-command behavior, command directions, joint limits, and shutdown before using `g1_real`.
+A shape check is not a behavior or safety test. Revalidate standing preparation, zero command, command directions,
+tilt shutdown, and operator shutdown with the complete mandatory-viewer `deployment=sim` path before hardware use.

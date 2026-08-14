@@ -1,56 +1,89 @@
-# Environments
+# G1Env
 
-An environment supplies robot state to `UnitreeWoGaitPolicy` and applies its joint position targets. RoboJuDo exposes two
-G1 29DoF environments:
+[`g1_playground/g1_env.py`](../g1_playground/g1_env.py) is the only policy-facing environment. It exposes one G1 state
+snapshot, accepts one 29-joint position target, and adapts that contract to the native Unitree HG DDS client.
 
-| Environment | Purpose | Configuration |
-| --- | --- | --- |
-| `MujocoEnv` | Local simulation | `g1` / `G1MujocoEnvCfg` |
-| `UnitreeCppEnv` | Real Unitree G1 | `g1_real` / `G1RealEnvCfg` |
-
-The common interface is defined in [`base_env.py`](../robojudo/environment/base_env.py).
-
-## 29DoF Contract
-
-Both environments expose the same policy inputs:
-
-- `dof_pos`: 29 joint positions
-- `dof_vel`: 29 joint velocities
-- `base_quat`: base orientation in `[x, y, z, w]` order
-- `base_ang_vel`: three-axis base angular velocity
-
-Each call to `step()` receives exactly 29 position targets. The policy configuration supplies its standing pose and tuned
-PD gains. The environment configuration declares torque and position limits, but the current runtime only applies torque
-clipping in MuJoCo; the UnitreeCpp path neither clamps position targets with `position_limits` nor uses `torque_limits`.
-Their joint lists must contain the same 29 names. A different ordering can be adapted, but partial joint control is rejected.
-
-## MujocoEnv
-
-[`mujoco_env.py`](../robojudo/environment/mujoco_env.py) loads
-`assets/robots/g1/g1_29dof_rev_1_0.xml` and applies position targets through the configured PD gains. The default simulation
-step is `0.001 s` with a decimation of 20, matching the policy's 50 Hz control rate.
-
-Install the viewer and run the simulation from the repository root:
-
-```bash
-python scripts/install_third_party.py
-python scripts/run_pipeline.py -c g1
+```text
+Policy -> G1Env -> DDS -+-> physical G1
+                       +-> G1MujocoDdsServer -> G1MujocoBackend
 ```
 
-Use this environment to verify standing behavior, command directions, saturation, falls, and shutdown before every
-hardware change.
+There is no environment base class, backend selector, direct `MujocoEnv`, or separate Unitree C++ environment wrapper.
+`domain_id` and `net_if` describe a DDS endpoint; they do not select simulator versus hardware behavior.
 
-## UnitreeCppEnv
+## Construction and ownership
 
-[`unitree_cpp_env.py`](../robojudo/environment/unitree_cpp_env.py) exchanges low-level state and position commands through
-Unitree SDK2 using the [`unitree_cpp`](https://github.com/HansZ8/unitree_cpp) binding. The robot-facing interface is set by
-the `g1_real` override in [`g1_cfg.py`](../robojudo/config/g1/g1_cfg.py). Real deployment must explicitly provide the atomic
-`hardware / domain 0 / non-lo interface` endpoint; there is no generic `eth0` fallback.
+The root [`configs/run_pipeline.yaml`](../configs/run_pipeline.yaml) owns the single `G1Env` `_target_`. A deployment
+profile contributes only endpoint/topics, `motion_switcher_required`, and its controller target. The launcher composes
+policy pose/gains into runtime joint order, constructs the policy, then injects its period into the environment:
 
-`UnitreeCppEnv` performs an SDK self-check during startup. Its `shutdown()` method disables further actions and invokes the
-SDK shutdown path. Installation and network preparation are documented in [Unitree G1 setup](unitree_setup.md).
+```python
+dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
+policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
+controller = instantiate(cfg.controller, env=env)
+```
+
+Thus the 20 ms client period has one policy owner; deployment YAML does not duplicate it. `G1Env` consumes only the
+composed joint names/stiffness/damping it needs. It has no position-limit configuration, joint-map option, Python `Box`
+configuration wrapper, reset method, fallen-state flag, or cached-state property.
+
+## State and target contract
+
+Every `read()` pulls exactly one native LowState and returns a frozen `G1State` containing:
+
+- `dof_pos`: 29 joint positions;
+- `dof_vel`: 29 joint velocities;
+- `base_quat`: `[x, y, z, w]`;
+- `base_ang_vel`: three angular-velocity values.
+
+All four NumPy arrays are detached copies and read-only. `scripts/run_pipeline.py` passes the same snapshot to
+`is_upright(state.base_quat)` and `policy.act(state, control)`; the tilt check does not ask the environment for another
+state.
+
+`step(target)` forwards exactly one 29-position target to native code. The live hardware path does not clamp target
+positions. `robot.dof.torque_limits` is consumed by the MuJoCo DDS server only and is not a hardware command barrier.
+
+## Lifecycle and DDS behavior
+
+Construction creates receive resources only. `self_check()` waits for a valid LowState; command transport is created by
+`activate_commands()` after dry inference and the final preflight check. The two profiles differ only here:
+
+- `sim`: `motion_switcher_required=false`, because the simulator has no MotionSwitcher service;
+- `real`: `motion_switcher_required=true`, requiring bounded successful check/release before LowCmd creation.
+
+The native client checks CRC, mode, finite values, advancing tick, and freshness. State older than
+`max(5 * control_dt, 0.1 s)` is rejected. The writer publishes at `control_dt`; a stale application target or stale
+LowState triggers one `Kp=0`, `Kd=5` damping command, clears the cached command, and rejects continued use. `shutdown()`
+is idempotent and sends damping only after activation.
+
+Both deployments use the same startup and loop:
+
+1. `self_check()` and 10 dry inference frames without writes;
+2. perform one more state/input/shutdown/tilt preflight, then activate commands;
+3. ramp measured pose to standing for 3 seconds, then reset policy history;
+4. blend into zero-command closed-loop policy control for 5 seconds;
+5. run the paced loop with shutdown and `is_upright(state.base_quat)` checks before each write;
+6. call `shutdown()` from `finally`.
+
+There is no simulator reset channel or `G1Env.reset()`. A tilt failure stops the client; restart the simulation processes
+instead of bypassing DDS to mutate backend state.
+
+## Simulator peer
+
+The standalone simulator is a DDS peer, not an environment implementation. On each 1 ms tick the server computes PD
+torque from its cached previous `MujocoState`, clips by `robot.dof.torque_limits`, and calls
+`backend.step(torque, support_scale)` once. That locked call sets elastic support, advances physics, and returns the only
+new read-only state snapshot for publication and the next tick. `G1MujocoBackend.timestep` is the single physics-period
+owner; the server derives its pacing period from the backend.
+
+Python writes only joint position/velocity/torque, quaternion, and gyroscope into each native LowState snapshot. Native
+snapshot defaults provide zero accelerometer, RPY, and wireless-remote fields. The fixed simulator
+`mode_machine=5` is supplied explicitly when the launcher constructs the native endpoint; it is not user YAML.
+
+The viewer remains observation-only and runs on copied render data. Unit and loopback tests can instantiate the
+viewer-free backend/server layers directly; the public simulator launcher intentionally requires a display.
 
 > [!CAUTION]
-> Passing startup checks does not prove that a checkpoint, joint order, gains, or network link is safe. Keep the hardware
-> emergency stop under direct operator control, keep people outside the robot's fall and reach envelope, and leave
-> `do_safety_check` enabled in `g1_real`.
+> Software checks, damping, torque clipping, and simulator behavior do not establish hardware safety. Keep the robot's
+> independent emergency stop guarded and its fall/reach envelope clear.

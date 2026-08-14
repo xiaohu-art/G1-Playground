@@ -20,6 +20,7 @@ class UnitreeConfig(Config):
 
     enable_odometry: bool = True
     sport_state_topic: str = "rt/odommodestate"
+    motion_switcher_required: bool = True
 
 # Config for G1 robot
 class RobotConfig(Config):

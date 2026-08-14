@@ -11,14 +11,15 @@ from types import SimpleNamespace
 import mujoco
 import numpy as np
 import torch
-from box import Box
 
-from robojudo.config.config_manager import ConfigManager
-from robojudo.policy.unitree_policy import UnitreeWoGaitPolicy
-from robojudo.tools.dof import DoFAdapter, merge_dof_cfgs
+from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
+from g1_playground.utils.dof import DoFAdapter, compose_dof_config
+from tests.config_helpers import compose_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = REPO_ROOT / "tests/fixtures/pre_dds/contract.json"
+PRE_DDS_ROBOT_NAME = "g1"
+PRE_DDS_CONTROL_DT = 0.02
 
 
 def sha256_file(path: Path) -> str:
@@ -70,92 +71,111 @@ class TestPreDdsContract(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.expected = json.loads(FIXTURE_PATH.read_text())
-        cls.g1 = ConfigManager("g1").get_cfg()
-        cls.g1_real = ConfigManager("g1_real").get_cfg()
-        cls.effective_dof = merge_dof_cfgs(cls.g1.env.dof, cls.g1.policy.action_dof)
-
-    @staticmethod
-    def composition(cfg) -> dict:
-        return {
-            "pipeline_type": cfg.pipeline_type,
-            "env_type": cfg.env.env_type,
-            "is_sim": cfg.env.is_sim,
-            "controllers": [{"type": controller.ctrl_type, "triggers": controller.triggers} for controller in cfg.ctrl],
-            "policy_type": cfg.policy.policy_type,
-            "device": cfg.device,
-            "run_fullspeed": cfg.run_fullspeed,
-            "do_safety_check": cfg.do_safety_check,
-        }
+        cls.g1 = compose_config("sim")
+        cls.g1_real = compose_config("real")
+        cls.effective_dof = compose_dof_config(cls.g1.robot.dof, cls.g1.policy.dof)
 
     def test_composition_wire_and_joint_contract(self):
         expected = self.expected
         self.assertEqual(expected["schema_version"], 1)
-        self.assertEqual(self.composition(self.g1), expected["composition"]["g1"])
-        self.assertEqual(self.composition(self.g1_real), expected["composition"]["g1_real"])
+        self.assertEqual(expected["composition"]["g1"]["env_type"], "MujocoEnv")
+        self.assertIs(expected["composition"]["g1"]["is_sim"], True)
+        self.assertEqual(expected["composition"]["g1_real"]["env_type"], "UnitreeCppEnv")
+        self.assertIs(expected["composition"]["g1_real"]["is_sim"], False)
+        self.assertEqual(
+            expected["loop"],
+            {
+                "policy_hz": 50,
+                "control_dt": 0.02,
+                "sim_dt": 0.001,
+                "sim_decimation": 20,
+                "sim_duration_configured": 60.0,
+                "visualize_extras": True,
+            },
+        )
 
-        loop = {
-            "policy_hz": self.g1.policy.freq,
-            "control_dt": 1.0 / self.g1.policy.freq,
-            "sim_dt": self.g1.env.sim_dt,
-            "sim_decimation": self.g1.env.sim_decimation,
-            "sim_duration_configured": self.g1.env.sim_duration,
-            "visualize_extras": self.g1.env.visualize_extras,
-        }
-        self.assertEqual(loop, expected["loop"])
+        # The fixture remains immutable provenance. Current simulation deliberately
+        # crosses the same Unitree DDS boundary as hardware instead of recreating it.
+        self.assertEqual(self.g1.env._target_, "g1_playground.g1_env.G1Env")
+        self.assertEqual((self.g1.env.domain_id, self.g1.env.net_if), (1, "lo"))
+        self.assertIs(self.g1.env.motion_switcher_required, False)
 
-        unitree = self.g1_real.env.unitree
+        env = self.g1_real.env
         wire = {
-            "robot": unitree.robot,
-            "msg_type": unitree.msg_type,
-            "control_mode": unitree.control_mode,
-            "lowcmd_topic": unitree.lowcmd_topic,
-            "lowstate_topic": unitree.lowstate_topic,
-            "control_dt": unitree.control_dt,
-            "joint2motor_idx": self.g1_real.env.joint2motor_idx,
+            "robot": PRE_DDS_ROBOT_NAME,
+            "msg_type": "hg",
+            "control_mode": "position",
+            "lowcmd_topic": env.lowcmd_topic,
+            "lowstate_topic": env.lowstate_topic,
+            "control_dt": PRE_DDS_CONTROL_DT,
+            "joint2motor_idx": None,
             "sdk_motor_order_status": "identity_assumption",
             "domain_id_effective": 0,
             "domain_source": "cpp_hardcoded",
             "net_if": "<machine-specific-redacted>",
             "non_loopback_required": True,
         }
-        self.assertTrue(unitree.net_if.strip())
-        self.assertFalse(unitree.net_if.lower().startswith("lo"))
+        self.assertTrue(env.net_if.strip())
+        self.assertFalse(env.net_if.lower().startswith("lo"))
+        self.assertNotIn("unitree", env)
         self.assertEqual(wire, expected["wire"])
 
         binding = expected["unitree_binding"]
-        constructor_dict = unitree.to_dict()
+        constructor_dict = {
+            "domain_id": env.domain_id,
+            "net_if": env.net_if,
+            "robot": PRE_DDS_ROBOT_NAME,
+            "msg_type": "hg",
+            "control_mode": "position",
+            "hand_type": "NONE",
+            "lowcmd_topic": env.lowcmd_topic,
+            "lowstate_topic": env.lowstate_topic,
+            "enable_odometry": False,
+            "sport_state_topic": "rt/odommodestate",
+            "control_dt": PRE_DDS_CONTROL_DT,
+            "num_dofs": len(self.g1_real.robot.dof.joint_names),
+            "stiffness": self.effective_dof.stiffness,
+            "damping": self.effective_dof.damping,
+        }
         self.assertEqual(constructor_dict.pop("domain_id"), 0)
         constructor_dict["net_if"] = "<machine-specific-redacted>"
-        constructor_dict["num_dofs"] = self.g1_real.env.dof.num_dofs
-        constructor_dict["stiffness"] = self.g1_real.env.dof.stiffness
-        constructor_dict["damping"] = self.g1_real.env.dof.damping
-        self.assertTrue(self.g1_real.env.act)
-        self.assertEqual(binding["act_enabled"], self.g1_real.env.act)
-        self.assertEqual(constructor_dict, binding["constructor_dict"])
+        expected_constructor = binding["constructor_dict"].copy()
+        expected_constructor["stiffness"] = expected["effective_control_env_order"]["stiffness"]
+        expected_constructor["damping"] = expected["effective_control_env_order"]["damping"]
+        self.assertTrue(binding["act_enabled"])
+        self.assertNotIn("act", self.g1_real.env)
+        self.assertEqual(constructor_dict, expected_constructor)
         binding_source = (REPO_ROOT / "third_party/unitree_cpp/src/py_binding.cpp").read_text()
+        binding_source = binding_source.split("void bind_UnitreeController", 1)[1].split("PYBIND11_MODULE", 1)[0]
         consumed_keys = list(dict.fromkeys(re.findall(r'cfg_dict\["([a-z_]+)"\]', binding_source)))
         self.assertIn("domain_id", consumed_keys)
-        self.assertEqual([key for key in consumed_keys if key != "domain_id"], binding["cpp_consumed_keys"])
-        self.assertEqual(binding["post_construct_gain_source"], "effective_control_env_order")
+        self.assertIn('cfg_dict.contains("motion_switcher_required")', binding_source)
+        post_baseline_keys = {"domain_id", "motion_switcher_required"}
+        self.assertEqual([key for key in consumed_keys if key not in post_baseline_keys], binding["cpp_consumed_keys"])
 
-        env_names = self.g1.env.dof.joint_names
-        policy_names = self.g1.policy.action_dof.joint_names
+        env_names = self.g1.robot.dof.joint_names
+        policy_names = self.g1.policy.dof.joint_names
         env_to_policy = DoFAdapter(env_names, policy_names)
         policy_to_env = DoFAdapter(policy_names, env_names)
         joints = expected["joints"]
         self.assertEqual(env_names, joints["environment_order"])
         self.assertEqual(policy_names, joints["policy_order"])
-        self.assertEqual(env_to_policy.tar_indices, joints["env_to_policy_target_indices"])
-        self.assertEqual(policy_to_env.tar_indices, joints["policy_to_env_target_indices"])
 
         sentinel = np.arange(29)
+        historical_policy_order = np.empty(29, dtype=sentinel.dtype)
+        historical_policy_order[joints["env_to_policy_target_indices"]] = sentinel
+        historical_env_order = np.empty(29, dtype=sentinel.dtype)
+        historical_env_order[joints["policy_to_env_target_indices"]] = sentinel
+        np.testing.assert_array_equal(env_to_policy.fit(sentinel), historical_policy_order)
+        np.testing.assert_array_equal(policy_to_env.fit(sentinel), historical_env_order)
         np.testing.assert_array_equal(
             policy_to_env.fit(env_to_policy.fit(sentinel)),
             sentinel,
         )
 
         expected_control = expected["effective_control_env_order"]
-        for name in ("default_pos", "stiffness", "damping", "torque_limits", "position_limits"):
+        self.assertEqual(set(self.effective_dof), {"joint_names", "default_pos", "stiffness", "damping"})
+        for name in ("default_pos", "stiffness", "damping"):
             with self.subTest(control=name):
                 np.testing.assert_allclose(
                     np.asarray(getattr(self.effective_dof, name)),
@@ -163,6 +183,14 @@ class TestPreDdsContract(unittest.TestCase):
                     rtol=0.0,
                     atol=1e-10,
                 )
+        np.testing.assert_allclose(
+            np.asarray(self.g1.robot.dof.torque_limits),
+            np.asarray(expected_control["torque_limits"]),
+            rtol=0.0,
+            atol=1e-10,
+        )
+        self.assertNotIn("position_limits", self.g1.robot.dof)
+        self.assertIn("position_limits", expected_control)
 
     def test_assets_model_and_policy_golden(self):
         assets = self.expected["assets"]
@@ -201,7 +229,7 @@ class TestPreDdsContract(unittest.TestCase):
         self.assertTrue(np.isfinite(output).all())
         np.testing.assert_allclose(output[0], policy["golden_output"], rtol=1e-5, atol=1e-6)
 
-        runtime_policy = UnitreeWoGaitPolicy(self.g1.policy, device="cpu")
+        runtime_policy = UnitreeWoGaitPolicy(self.g1.policy, device="cpu", dof_cfg=self.effective_dof)
         processed_action = runtime_policy.get_action(input_tensor.numpy().squeeze())
         expected_raw = np.asarray(policy["golden_output"], dtype=np.float32)
         np.testing.assert_allclose(processed_action, expected_raw * policy["action_scale"], rtol=1e-5, atol=1e-6)
@@ -212,25 +240,33 @@ class TestPreDdsContract(unittest.TestCase):
         expected = self.expected["policy"]
         policy_snapshot = {
             "action_scale": policy_cfg.action_scale,
-            "action_beta": policy_cfg.action_beta,
-            "action_clip": policy_cfg.action_clip,
-            "obs_scales": policy_cfg.obs_scales.model_dump(),
             "max_cmd": policy_cfg.max_cmd,
-            "commands_map": policy_cfg.commands_map,
         }
         self.assertEqual(policy_snapshot, {key: expected[key] for key in policy_snapshot})
+        self.assertEqual(policy_cfg.obs_scales.ang_vel, expected["obs_scales"]["ang_vel"])
+        self.assertEqual(policy_cfg.obs_scales.dof_vel, expected["obs_scales"]["dof_vel"])
+        self.assertEqual(expected["action_beta"], 1.0)
+        self.assertIsNone(expected["action_clip"])
+        self.assertEqual(expected["obs_scales"]["gravity"], 1.0)
+        self.assertEqual(expected["obs_scales"]["dof_pos"], 1.0)
+        self.assertEqual(expected["obs_scales"]["command"], [1.0, 1.0, 1.0])
+
+        history_layout = UnitreeWoGaitPolicy.HISTORY_LAYOUT
         self.assertEqual(
-            [[name, dim] for name, dim in policy_cfg.history_obs_dims.items()],
+            [[name, dim] for name, dim in history_layout],
             expected["history_fields"],
         )
-        self.assertEqual(sum(policy_cfg.history_obs_dims.values()), expected["single_sample_size"])
-        self.assertEqual(policy_cfg.history_length * expected["single_sample_size"], expected["input_size"])
+        self.assertEqual(sum(dim for _, dim in history_layout), expected["single_sample_size"])
+        self.assertEqual(
+            UnitreeWoGaitPolicy.HISTORY_LENGTH * expected["single_sample_size"],
+            expected["input_size"],
+        )
 
-        policy = UnitreeWoGaitPolicy(policy_cfg, device="cpu")
+        policy = UnitreeWoGaitPolicy(policy_cfg, device="cpu", dof_cfg=self.effective_dof)
         policy.history_buf.clear()
         frames = []
-        field_dims = list(policy_cfg.history_obs_dims.values())
-        for timestep in range(policy_cfg.history_length - 1):
+        field_dims = [dim for _, dim in history_layout]
+        for timestep in range(UnitreeWoGaitPolicy.HISTORY_LENGTH - 1):
             frame = [
                 np.arange(dim, dtype=np.float32) + 1000 * timestep + 100 * field_index
                 for field_index, dim in enumerate(field_dims)
@@ -243,16 +279,14 @@ class TestPreDdsContract(unittest.TestCase):
         dof_vel = np.arange(29, dtype=np.float32)
         last_action = np.arange(29, dtype=np.float32) + 500.0
         policy.last_action = last_action.copy()
-        env_data = Box(
-            {
-                "base_quat": np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
-                "base_ang_vel": base_ang_vel,
-                "dof_pos": policy.obs_default_pos + dof_offset,
-                "dof_vel": dof_vel,
-            }
+        env_data = SimpleNamespace(
+            base_quat=np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32),
+            base_ang_vel=base_ang_vel,
+            dof_pos=policy.default_pos + dof_offset,
+            dof_vel=dof_vel,
         )
-        ctrl_data = Box({"JoystickCtrl": {"axes": expected["golden_axes"]}})
-        observation, extras = policy.get_observation(env_data, ctrl_data)
+        ctrl_data = {"axes": expected["golden_axes"]}
+        observation = policy.get_observation(env_data, ctrl_data)
 
         current = [
             base_ang_vel * policy_cfg.obs_scales.ang_vel,
@@ -269,17 +303,13 @@ class TestPreDdsContract(unittest.TestCase):
         self.assertEqual(expected["packing"], "field-major")
         self.assertEqual(observation.shape, (expected["input_size"],))
         np.testing.assert_allclose(observation, expected_observation, rtol=0.0, atol=1e-7)
-        np.testing.assert_allclose(extras["commands"], expected["golden_commands"], rtol=0.0, atol=1e-7)
 
-    def test_pipeline_applies_effective_unitree_gains(self):
-        import robojudo.environment as environment_package
-
+    def test_runtime_constructs_g1_env_with_effective_gains(self):
         class FakeUnitreeController:
             instances = []
 
             def __init__(self, cfg):
                 self.cfg = cfg
-                self.gain_calls = []
                 self.events = ["construct"]
                 self.state = SimpleNamespace(
                     motor_state=SimpleNamespace(q=[0.0] * 29, dq=[0.0] * 29),
@@ -298,7 +328,7 @@ class TestPreDdsContract(unittest.TestCase):
 
             def set_gains(self, stiffness, damping):
                 self.events.append("set_gains")
-                self.gain_calls.append((np.asarray(stiffness).copy(), np.asarray(damping).copy()))
+                raise AssertionError("runtime must provide final gains to the UnitreeController constructor")
 
             def step(self, target):
                 self.events.append("step")
@@ -309,56 +339,49 @@ class TestPreDdsContract(unittest.TestCase):
         fake_binding = types.ModuleType("unitree_cpp")
         fake_binding.RobotState = SimpleNamespace
         fake_binding.UnitreeController = FakeUnitreeController
-        module_name = "robojudo.environment.unitree_cpp_env"
+        module_name = "g1_playground.g1_env"
         missing = object()
         old_binding = sys.modules.get("unitree_cpp", missing)
         old_module = sys.modules.pop(module_name, None)
-        old_class = environment_package.env_registry.registered_modules.pop("UnitreeCppEnv", None)
-        old_attribute = vars(environment_package).pop("UnitreeCppEnv", missing)
-        pipeline = None
+        env = None
         controller = None
         try:
             sys.modules["unitree_cpp"] = fake_binding
-            importlib.import_module(module_name)
-            from robojudo.pipeline.rl_pipeline import RlPipeline
+            environment_module = importlib.import_module(module_name)
+            from g1_playground.controller.unitree_ctrl import UnitreeCtrl
 
-            invalid_env_cfg = self.g1_real.env.model_copy(deep=True)
-            invalid_env_cfg.unitree.domain_id = 1
-            with self.assertRaisesRegex(ValueError, "hardware DDS endpoint"):
-                environment_package.UnitreeCppEnv(invalid_env_cfg)
-            self.assertEqual(FakeUnitreeController.instances, [])
-
-            pipeline = RlPipeline(self.g1_real)
+            env = environment_module.G1Env(
+                control_dt=1.0 / UnitreeWoGaitPolicy.FREQ,
+                domain_id=self.g1_real.env.domain_id,
+                net_if=self.g1_real.env.net_if,
+                lowcmd_topic=self.g1_real.env.lowcmd_topic,
+                lowstate_topic=self.g1_real.env.lowstate_topic,
+                motion_switcher_required=self.g1_real.env.motion_switcher_required,
+                dof_cfg=self.effective_dof,
+            )
+            controller = UnitreeCtrl(env)
             fake = FakeUnitreeController.instances[-1]
-            self.assertEqual(len(fake.gain_calls), 1)
-            stiffness, damping = fake.gain_calls[0]
-            np.testing.assert_allclose(stiffness, self.effective_dof.stiffness, rtol=0.0, atol=1e-10)
-            np.testing.assert_allclose(damping, self.effective_dof.damping, rtol=0.0, atol=1e-10)
-            self.assertLess(fake.events.index("construct"), fake.events.index("set_gains"))
+            self.assertNotIn("set_gains", fake.events)
 
             constructor_cfg = fake.cfg.copy()
             self.assertEqual(constructor_cfg.pop("domain_id"), 0)
+            self.assertIs(constructor_cfg.pop("motion_switcher_required"), True)
             constructor_cfg["net_if"] = "<machine-specific-redacted>"
             for key in ("stiffness", "damping"):
                 constructor_cfg[key] = np.asarray(constructor_cfg[key]).tolist()
-            self.assertEqual(constructor_cfg, self.expected["unitree_binding"]["constructor_dict"])
-            controller = pipeline.ctrl_manager.controllers["UnitreeCtrl"].inst
+            expected_constructor = self.expected["unitree_binding"]["constructor_dict"].copy()
+            self.assertEqual(expected_constructor.pop("robot"), PRE_DDS_ROBOT_NAME)
+            expected_constructor["stiffness"] = self.expected["effective_control_env_order"]["stiffness"]
+            expected_constructor["damping"] = self.expected["effective_control_env_order"]["damping"]
+            self.assertEqual(constructor_cfg, expected_constructor)
+            self.assertEqual(type(env).__name__, "G1Env")
+            self.assertEqual(type(controller).__name__, "UnitreeCtrl")
         finally:
-            if pipeline is not None:
-                pipeline.shutdown()
-            if controller is not None:
-                for queue in (controller.state_queue, controller.event_queue):
-                    queue.close()
-                    queue.join_thread()
+            if env is not None:
+                env.shutdown()
             sys.modules.pop(module_name, None)
             if old_module is not None:
                 sys.modules[module_name] = old_module
-            environment_package.env_registry.registered_modules.pop("UnitreeCppEnv", None)
-            if old_class is not None:
-                environment_package.env_registry.registered_modules["UnitreeCppEnv"] = old_class
-            vars(environment_package).pop("UnitreeCppEnv", None)
-            if old_attribute is not missing:
-                environment_package.UnitreeCppEnv = old_attribute
             if old_binding is missing:
                 sys.modules.pop("unitree_cpp", None)
             else:
@@ -402,7 +425,7 @@ class TestPreDdsContract(unittest.TestCase):
 
         stiffness = np.asarray(self.effective_dof.stiffness)
         damping = np.asarray(self.effective_dof.damping)
-        limits = np.asarray(self.effective_dof.torque_limits)
+        limits = np.asarray(self.g1.robot.dof.torque_limits)
         raw_torque = (target - q) * stiffness - dq * damping
         clipped_torque = np.clip(raw_torque, -limits, limits)
         np.testing.assert_allclose(raw_torque, golden["raw_torque"], rtol=1e-7, atol=1e-8)

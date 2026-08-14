@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PRE_DDS_CONTRACT_PATH = REPO_ROOT / "tests/fixtures/pre_dds/contract.json"
 PHASE1_BOUNDARY_PATH = REPO_ROOT / "tests/fixtures/dds_phase1/unitree_cpp_boundary.json"
+PHASE2_BOUNDARY_PATH = REPO_ROOT / "tests/fixtures/dds_phase2/observer_activation_boundary.json"
 PRE_DDS_CONTRACT_SHA256 = "d43db515848107099105f3ae2e891097410b7810bfd4ecf14d3a5ba0dbeb240b"
 PHASE1_BOUNDARY_SHA256 = "f42ecbf234a9187c685914917212a2231ceab44db8c10a8c47008913158c0def"
 EXCLUDED_DIRS = {".git", "__pycache__", "build", "dist"}
@@ -76,13 +77,14 @@ class TestDdsPhase1Boundary(unittest.TestCase):
         self.assertEqual(boundary_vendor["license"], expected_vendor["license"])
         self.assertEqual(boundary_vendor["baseline_closure"], expected_vendor["closure"])
 
-    def test_unitree_cpp_changes_stay_inside_phase1_boundary(self):
+    def test_unitree_cpp_phase1_snapshot_stays_inside_phase1_boundary(self):
         vendor = self.boundary["vendor"]
-        vendor_root = REPO_ROOT / vendor["root"]
         baseline = vendor["baseline_files"]
         allowed = vendor["allowed_changes"]
-        current = source_file_hashes(vendor_root)
-        changes = classify_changes(baseline, current)
+        phase2_boundary = json.loads(PHASE2_BOUNDARY_PATH.read_text())
+        phase1_snapshot = phase2_boundary["vendor"]["phase1_files"]
+        self.assertEqual(set(phase1_snapshot), set(baseline))
+        changes = classify_changes(baseline, phase1_snapshot)
 
         self.assertLessEqual(set(allowed["modified"]), set(baseline))
         violations = boundary_violations(changes, allowed)
@@ -90,11 +92,7 @@ class TestDdsPhase1Boundary(unittest.TestCase):
             with self.subTest(change_type=change_type):
                 self.assertEqual(paths, [], f"unapproved UnitreeCpp {change_type} paths: {paths}")
 
-        current_closure = source_closure(vendor_root)
-        if any(changes.values()):
-            self.assertNotEqual(current_closure, vendor["baseline_closure"])
-        else:
-            self.assertEqual(current_closure, vendor["baseline_closure"])
+        self.assertTrue(any(changes.values()))
 
     def test_boundary_rejects_every_unapproved_difference_type(self):
         baseline = {"example/config.py": "old", "LICENSE": "old", "src/py_binding.cpp": "old"}

@@ -2,18 +2,30 @@ import importlib
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import torch
-from box import Box
+from hydra.errors import MissingConfigException
+from omegaconf import OmegaConf
+
+from tests.config_helpers import asset_path, compose_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-EXPECTED_CONFIGS = {"g1", "g1_real"}
+EXPECTED_DEPLOYMENTS = {"sim", "real"}
 EXPECTED_POLICIES = {"UnitreeWoGaitPolicy"}
-EXPECTED_PIPELINES = {"RlPipeline"}
 EXPECTED_CONTROLLERS = {"JoystickCtrl", "UnitreeCtrl"}
-EXPECTED_ENVIRONMENTS = {"MujocoEnv", "UnitreeCppEnv"}
 EXPECTED_CHECKPOINT = REPO_ROOT / "assets/models/g1/unitree/policy_wo_gait.pt"
+EXPECTED_COMPONENTS = {
+    "sim": (
+        "g1_playground.g1_env.G1Env",
+        "g1_playground.controller.joystick_ctrl.JoystickCtrl",
+    ),
+    "real": (
+        "g1_playground.g1_env.G1Env",
+        "g1_playground.controller.unitree_ctrl.UnitreeCtrl",
+    ),
+}
 EXPECTED_UNITREE_CPP_FILES = {
     ".gitignore",
     "CHANGELOG.md",
@@ -25,6 +37,8 @@ EXPECTED_UNITREE_CPP_FILES = {
     "example/requirements.txt",
     "example/unitree_cpp_env.py",
     "pyproject.toml",
+    "src/dds_sim_server.cpp",
+    "src/dds_sim_server.hpp",
     "src/py_binding.cpp",
     "src/unitree_controller.cpp",
     "src/unitree_controller.hpp",
@@ -33,42 +47,36 @@ EXPECTED_UNITREE_CPP_FILES = {
 
 
 class TestFullImports(unittest.TestCase):
-    def assert_registry(self, registry, expected_types, import_types=None):
-        self.assertEqual(set(registry.types), expected_types)
-        for type_name in sorted(expected_types if import_types is None else import_types):
-            with self.subTest(type=type_name):
-                registered_class = registry.get(type_name)
-                self.assertEqual(registered_class.__name__, type_name)
-
-    def test_config_registry_and_29dof_contract(self):
-        from robojudo.config import cfg_registry
-
-        self.assert_registry(cfg_registry, EXPECTED_CONFIGS)
-
+    def test_explicit_config_profiles_and_29dof_contract(self):
         checkpoints = set()
-        for type_name in sorted(EXPECTED_CONFIGS):
-            with self.subTest(config=type_name):
-                cfg = cfg_registry.get(type_name)()
-                self.assertEqual(cfg.robot, "g1")
-                self.assertEqual(cfg.policy.policy_type, "UnitreeWoGaitPolicy")
-                self.assertEqual(cfg.policy.history_length, 5)
-                self.assertEqual(sum(cfg.policy.history_obs_dims.values()), 96)
+        for deployment in sorted(EXPECTED_DEPLOYMENTS):
+            with self.subTest(deployment=deployment):
+                cfg = compose_config(deployment)
+                self.assertEqual(set(cfg.robot), {"xml", "dof"})
+                self.assertEqual(
+                    (cfg.env._target_, cfg.controller._target_),
+                    EXPECTED_COMPONENTS[deployment],
+                )
+                self.assertNotIn("environment", cfg)
+                self.assertNotIn("components", cfg)
+                round_trip = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+                self.assertEqual(round_trip, cfg)
+                self.assertNotIn("history_length", cfg.policy)
+                self.assertNotIn("history_obs_dims", cfg.policy)
 
                 dof_configs = {
-                    "environment": cfg.env.dof,
-                    "observation": cfg.policy.obs_dof,
-                    "action": cfg.policy.action_dof,
+                    "environment": cfg.robot.dof,
+                    "policy": cfg.policy.dof,
                 }
                 for label, dof_cfg in dof_configs.items():
-                    with self.subTest(config=type_name, dof=label):
-                        self.assertEqual(dof_cfg.num_dofs, 29)
+                    with self.subTest(deployment=deployment, dof=label):
+                        self.assertEqual(len(dof_cfg.joint_names), 29)
                         self.assertEqual(len(set(dof_cfg.joint_names)), 29)
 
-                expected_joints = set(cfg.env.dof.joint_names)
-                self.assertEqual(set(cfg.policy.obs_dof.joint_names), expected_joints)
-                self.assertEqual(set(cfg.policy.action_dof.joint_names), expected_joints)
+                expected_joints = set(cfg.robot.dof.joint_names)
+                self.assertEqual(set(cfg.policy.dof.joint_names), expected_joints)
 
-                checkpoint = Path(cfg.policy.policy_file)
+                checkpoint = asset_path(cfg.policy.policy_file)
                 self.assertEqual(checkpoint.resolve(), EXPECTED_CHECKPOINT)
                 self.assertTrue(checkpoint.is_file(), f"Missing checkpoint: {checkpoint}")
                 checkpoints.add(checkpoint.resolve())
@@ -79,29 +87,79 @@ class TestFullImports(unittest.TestCase):
         retained_checkpoints = {path.resolve() for path in model_root.rglob("*") if path.suffix in {".onnx", ".pt"}}
         self.assertEqual(retained_checkpoints, {EXPECTED_CHECKPOINT})
 
-    def test_policy_registry(self):
-        from robojudo.policy import policy_registry
+        first = compose_config("sim")
+        second = compose_config("sim")
+        first.policy.dof.default_pos[0] = 123.0
+        self.assertNotEqual(first.policy.dof.default_pos, second.policy.dof.default_pos)
+        with self.assertRaises(MissingConfigException):
+            compose_config("missing")
 
-        self.assert_registry(policy_registry, EXPECTED_POLICIES)
+        real = compose_config("real")
+        self.assertEqual(real.env.domain_id, 0)
+        self.assertNotIn("unitree", real.env)
+        self.assertIs(real.env.motion_switcher_required, True)
+        self.assertNotIn("target", real.env)
+        self.assertNotIn("act", real.env)
 
-    def test_pipeline_registry(self):
-        from robojudo.pipeline import pipeline_registry
+        sim = compose_config("sim")
+        self.assertEqual(sim.env.domain_id, 1)
+        self.assertEqual(sim.env.net_if, "lo")
+        self.assertIs(sim.env.motion_switcher_required, False)
+        self.assertEqual(sim.controller._target_, "g1_playground.controller.joystick_ctrl.JoystickCtrl")
 
-        self.assert_registry(pipeline_registry, EXPECTED_PIPELINES)
+        for deployment in EXPECTED_DEPLOYMENTS:
+            cfg = compose_config(deployment)
+            self.assertNotIn("do_safety_check", cfg)
+            self.assertNotIn("run_fullspeed", cfg)
 
-    def test_controller_registry(self):
-        from robojudo.controller import ctrl_registry
+    def test_removed_registry_scaffolding_stays_removed(self):
+        obsolete_modules = (
+            "g1_playground/config/config_class.py",
+            "g1_playground/config/config_manager.py",
+            "g1_playground/config/global_path.py",
+            "g1_playground/controller/ctrl_cfgs.py",
+            "g1_playground/controller/ctrl_manager.py",
+            "g1_playground/environment/__init__.py",
+            "g1_playground/environment/base_env.py",
+            "g1_playground/environment/env_cfgs.py",
+            "g1_playground/environment/mujoco_env.py",
+            "g1_playground/environment/unitree_cpp_env.py",
+            "g1_playground/environment/utils/mujoco_viz.py",
+            "g1_playground/pipeline/pipeline_cfgs.py",
+            "g1_playground/policy/policy_cfgs.py",
+            "g1_playground/tools/tool_cfgs.py",
+            "g1_playground/utils/module_registry.py",
+            "g1_playground/utils/util_func.py",
+        )
+        for relative_path in obsolete_modules:
+            with self.subTest(path=relative_path):
+                self.assertFalse((REPO_ROOT / relative_path).is_file())
+        self.assertFalse((REPO_ROOT / "g1_playground/pipeline").exists())
+        self.assertFalse((REPO_ROOT / "g1_playground/pipeline.py").exists())
+        self.assertFalse((REPO_ROOT / "g1_playground/tools").exists())
 
-        self.assert_registry(ctrl_registry, EXPECTED_CONTROLLERS)
+    def test_explicit_component_imports(self):
+        from g1_playground.controller.joystick_ctrl import JoystickCtrl
+        from g1_playground.controller.unitree_ctrl import UnitreeCtrl
+        from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
 
-    def test_environment_registry(self):
-        from robojudo.environment import env_registry
+        self.assertEqual({UnitreeWoGaitPolicy.__name__}, EXPECTED_POLICIES)
+        self.assertEqual({JoystickCtrl.__name__, UnitreeCtrl.__name__}, EXPECTED_CONTROLLERS)
+        self.assertTrue((REPO_ROOT / "g1_playground/g1_env.py").is_file())
+        self.assertFalse((REPO_ROOT / "g1_playground/environment").exists())
 
-        self.assert_registry(env_registry, EXPECTED_ENVIRONMENTS, import_types={"MujocoEnv"})
+    def test_controller_owns_its_read(self):
+        from g1_playground.controller.base_ctrl import Controller
 
-    def test_unitree_cpp_environment_import(self):
-        from robojudo.environment import env_registry
+        controller = Controller(("LeftX",))
+        controller.event_queue.put({"type": "button", "name": "A", "pressed": True})
 
+        control, shutdown_requested = controller.read()
+
+        self.assertEqual(control, {"axes": {"LeftX": 0.0}})
+        self.assertTrue(shutdown_requested)
+
+    def test_g1_environment_import(self):
         try:
             importlib.import_module("unitree_cpp")
         except ImportError as exc:
@@ -111,15 +169,16 @@ class TestFullImports(unittest.TestCase):
         native_config = native_binding.UnitreeConfig()
         native_config.domain_id = 1
         self.assertEqual(native_config.domain_id, 1)
+        self.assertTrue(hasattr(native_binding, "ControllerState"))
+        self.assertTrue(hasattr(native_binding.UnitreeController, "activate_commands"))
+        self.assertTrue(hasattr(native_binding.UnitreeController, "lifecycle_state"))
 
-        environment_class = env_registry.get("UnitreeCppEnv")
-        self.assertEqual(environment_class.__name__, "UnitreeCppEnv")
+        environment_class = importlib.import_module("g1_playground.g1_env").G1Env
+        self.assertEqual(environment_class.__name__, "G1Env")
 
     def test_wogait_torchscript_shape(self):
-        from robojudo.config import cfg_registry
-
-        cfg = cfg_registry.get("g1")()
-        model = torch.jit.load(cfg.policy.policy_file, map_location="cpu")
+        cfg = compose_config("sim")
+        model = torch.jit.load(asset_path(cfg.policy.policy_file), map_location="cpu")
         model.eval()
         with torch.no_grad():
             output = model(torch.zeros((1, 480), dtype=torch.float32))
@@ -128,25 +187,26 @@ class TestFullImports(unittest.TestCase):
         self.assertEqual(tuple(output.shape), (1, 29))
 
     def test_wogait_observation_and_action(self):
-        from robojudo.config import cfg_registry
-        from robojudo.policy.unitree_policy import UnitreeWoGaitPolicy
+        from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
+        from g1_playground.utils.dof import compose_dof_config
 
-        cfg = cfg_registry.get("g1")().policy
-        policy = UnitreeWoGaitPolicy(cfg, device="cpu")
-        env_data = Box(
-            {
-                "base_quat": np.array([0.0, 0.0, 0.0, 1.0]),
-                "base_ang_vel": np.zeros(3),
-                "dof_pos": np.asarray(cfg.obs_dof.default_pos),
-                "dof_vel": np.zeros(29),
-            }
+        cfg = compose_config("sim")
+        effective_dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
+        policy = UnitreeWoGaitPolicy(cfg.policy, device="cpu", dof_cfg=effective_dof)
+        env_data = SimpleNamespace(
+            base_quat=np.array([0.0, 0.0, 0.0, 1.0]),
+            base_ang_vel=np.zeros(3),
+            dof_pos=np.asarray(effective_dof.default_pos),
+            dof_vel=np.zeros(29),
         )
-        ctrl_data = Box({"JoystickCtrl": {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0, "RightY": 0.0}}})
+        ctrl_data = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0, "RightY": 0.0}}
 
-        observation, extras = policy.get_observation(env_data, ctrl_data)
-        self.assertEqual(observation.shape, (480,))
-        self.assertTrue(np.allclose(extras["commands"], 0.0))
-        self.assertEqual(policy.get_action(observation).shape, (29,))
+        target = policy.act(env_data, ctrl_data)
+        self.assertEqual(target.shape, (29,))
+        self.assertEqual(policy.standing_target.shape, (29,))
+
+        ctrl_data["axes"].update({"LeftY": 0.039, "LeftX": -0.039, "RightX": 0.04})
+        self.assertEqual(policy.act(env_data, ctrl_data).shape, (29,))
 
     def test_robot_asset_closure(self):
         robot_root = EXPECTED_CHECKPOINT.parents[3] / "robots/g1"
@@ -183,12 +243,19 @@ class TestFullImports(unittest.TestCase):
             with self.subTest(obsolete_path=obsolete_path):
                 self.assertFalse(obsolete_path.exists())
 
-        self.assertTrue((REPO_ROOT / "scripts/install_third_party.py").is_file())
+        installer = REPO_ROOT / "scripts/install_third_party.py"
+        self.assertTrue(installer.is_file())
+        installer_source = installer.read_text()
+        self.assertIn('"unitree_cpp": ROOT_DIR / "third_party/unitree_cpp"', installer_source)
+        self.assertNotIn('"mujoco_viewer":', installer_source)
         self.assertFalse(any(path.name == ".git" for path in third_party_root.rglob(".git")))
         self.assertFalse(any(third_party_root.rglob("*.egg-info")))
 
         unitree_files = {
-            path.relative_to(unitree_root).as_posix() for path in unitree_root.rglob("*") if path.is_file()
+            path.relative_to(unitree_root).as_posix()
+            for path in unitree_root.rglob("*")
+            if path.is_file()
+            and not any(part in {"build", "dist", "__pycache__"} or part.endswith(".egg-info") for part in path.parts)
         }
         self.assertEqual(unitree_files, EXPECTED_UNITREE_CPP_FILES)
 

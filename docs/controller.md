@@ -1,73 +1,66 @@
 # Controllers
 
-Controllers translate operator input into `ctrl_data` for `UnitreeWoGaitPolicy`. RoboJuDo exposes two controllers with the
-same velocity-axis convention:
+Controllers are operator-input sources. They do not own the policy, environment lifecycle, or command targets.
 
-| Controller | Configuration | Input source | Used by |
-| --- | --- | --- | --- |
-| `JoystickCtrl` | `JoystickCtrlCfg` | Xbox-compatible controller | `g1` |
-| `UnitreeCtrl` | `UnitreeCtrlCfg` | Unitree G1 remote | `g1_real` |
+| Deployment | Controller | Input source |
+| --- | --- | --- |
+| `sim` | `JoystickCtrl` | local Xbox-compatible controller |
+| `real` | `UnitreeCtrl` | wireless-remote bytes carried by G1 LowState |
 
-The base interface and controller aggregation live in
-[`base_ctrl.py`](../robojudo/controller/base_ctrl.py) and
-[`ctrl_manager.py`](../robojudo/controller/ctrl_manager.py).
+[`Controller`](../g1_playground/controller/base_ctrl.py) is a concrete queue consumer. `JoystickCtrl` and `UnitreeCtrl`
+are sibling subclasses that only connect different producers to those queues; neither input source inherits from the
+other. The deployment profile selects one `controller._target_`, and
+[`scripts/run_pipeline.py`](../scripts/run_pipeline.py) constructs it with the shared `G1Env`.
 
-## Common Data Contract
+## Read contract
 
-Both controllers provide an `axes` mapping and a list of button events. A representative payload is:
+`Controller.read()` drains queued updates and returns:
 
-```json
-{
-  "axes": {
-    "LeftX": 0.0,
-    "LeftY": 0.0,
-    "RightX": 0.0,
-    "RightY": 0.0
-  },
-  "button_event": [
-    {"type": "button", "name": "A", "pressed": true, "timestamp": 1758886189.68}
-  ]
-}
+```python
+control, shutdown_requested = controller.read()
+# control == {"axes": {"LeftX": ..., "LeftY": ..., "RightX": ..., ...}}
+# shutdown_requested is bool
 ```
 
-`UnitreeWoGaitPolicy` consumes these axes as follows:
+The newest axis sample is retained. All pending button edges are consumed, and any pressed `A` edge makes the boolean
+true for that read. The launcher checks it before policy inference and before the next target write. There is no command
+list, trigger registry, controller manager, or post-step callback.
 
-- `LeftY`: forward and backward velocity
-- `LeftX`: lateral velocity
-- `RightX`: yaw rate
-- `A`: emit `[SHUTDOWN]`
+The policy consumes three normalized axes:
 
-The local path expects SDL/pygame to provide stick values in `[-1, 1]`; it applies configured inversion and rounding but no
-general clamp. The Unitree path likewise expects the wireless-remote protocol to provide values in that range. The policy
-then remaps axes to configured velocity limits. Start every run with the sticks released.
+- `LeftY`: forward/backward velocity;
+- `LeftX`: lateral velocity;
+- `RightX`: yaw rate.
+
+The policy owns dead-zone, sign, and maximum-command scaling. Start each run with the sticks released.
 
 ## JoystickCtrl
 
-[`joystick_ctrl.py`](../robojudo/controller/joystick_ctrl.py) reads a locally connected controller through the mappings in
-[`controller/utils/joystick.py`](../robojudo/controller/utils/joystick.py). It is the input source for MuJoCo simulation.
-
-Run the simulation with:
+[`JoystickCtrl`](../g1_playground/controller/joystick_ctrl.py) starts the pygame input thread and feeds the base queues.
+It is used by the two-process DDS simulation:
 
 ```bash
-python scripts/run_pipeline.py -c g1
+# Terminal 1: mandatory-viewer simulator
+python scripts/run_mujoco_dds_server.py
+# Terminal 2: policy client and local joystick
+python scripts/run_pipeline.py deployment=sim
 ```
 
-If axes are missing or reversed, stop the pipeline and correct the controller mapping before changing policy command
-scales. Pressing `A` closes the simulation through the same shutdown command used on hardware.
+If no local controller is connected, the producer keeps all axes at zero. In that case `A` is unavailable; use
+`Ctrl+C` to stop the client.
 
 ## UnitreeCtrl
 
-[`unitree_ctrl.py`](../robojudo/controller/unitree_ctrl.py) receives the G1 remote state through `UnitreeCppEnv`. It is used
-only by `g1_real`; it does not open a separate desktop controller device.
+[`UnitreeCtrl`](../g1_playground/controller/unitree_ctrl.py) attaches a wireless-remote parser to
+`env.remote_controller_handler`; it does not open a desktop device or retain a second environment reference. It is used
+only by `deployment=real`:
 
 ```bash
-python scripts/run_pipeline.py -c g1_real
+python scripts/run_pipeline.py deployment=real env.net_if=ROBOT_NIC
 ```
 
 > [!CAUTION]
-> `A` is a software shutdown path. Test it with the robot secured and at zero command before any locomotion test, but never
-> treat it as the only emergency stop. A trained operator must continuously hold the independent hardware emergency stop
-> and keep the operating area clear.
+> `A` is a software shutdown request, not an emergency stop. Verify it with the robot secured and zero commanded
+> velocity, while a trained operator continuously guards the independent hardware emergency stop.
 
-Do not remap `A`, suppress `[SHUTDOWN]`, or add command-producing controller sources to `g1_real` without a dedicated safety
-review and a new simulation validation record.
+Do not remap or suppress the `A` edge on the real profile without a dedicated safety review and new simulation evidence.

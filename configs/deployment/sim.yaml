@@ -1,0 +1,11 @@
+# @package _global_
+
+env:
+  domain_id: 1
+  net_if: lo
+  lowcmd_topic: rt/lowcmd
+  lowstate_topic: rt/lowstate
+  motion_switcher_required: false
+
+controller:
+  _target_: g1_playground.controller.joystick_ctrl.JoystickCtrl
