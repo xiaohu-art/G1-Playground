@@ -21,6 +21,9 @@ include = ["g1_playground*"]
 dependencies = {file = ["requirements.txt"]}
 
 [project.optional-dependencies]
+teleop = [
+    "viser",
+]
 dev = [
     "pre-commit==4.3.0",
     "ruff==0.12.7",

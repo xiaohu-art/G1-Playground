@@ -4,6 +4,7 @@
 #include <vector>
 #include "g1_dds_control_endpoint.hpp"
 #include "g1_dds_robot_endpoint.hpp"
+#include "inspire_dds_endpoint.hpp"
 
 namespace py = pybind11;
 
@@ -178,6 +179,57 @@ void bind_G1DdsControlEndpoint(py::module_& m) {
         .def("get_sport_state", &G1DdsControlEndpoint::get_sport_state);
 }
 
+void bind_InspireDdsEndpoint(py::module_& m) {
+    py::class_<InspireDdsEndpointConfig>(m, "InspireDdsEndpointConfig")
+        .def(py::init<>())
+        .def_readwrite("domain_id", &InspireDdsEndpointConfig::domain_id)
+        .def_readwrite("net_if", &InspireDdsEndpointConfig::net_if)
+        .def_readwrite("cmd_topic", &InspireDdsEndpointConfig::cmd_topic)
+        .def_readwrite("state_topic", &InspireDdsEndpointConfig::state_topic);
+
+    py::class_<InspireStateSnapshot>(m, "InspireStateSnapshot")
+        .def(py::init<>())
+        .def_readonly("valid", &InspireStateSnapshot::valid)
+        .def_readonly("sequence", &InspireStateSnapshot::sequence)
+        .def_readonly("age_seconds", &InspireStateSnapshot::age_seconds)
+        .def_readonly("q", &InspireStateSnapshot::q)
+        .def_readonly("dq", &InspireStateSnapshot::dq);
+
+    py::class_<InspireCommandSnapshot>(m, "InspireCommandSnapshot")
+        .def(py::init<>())
+        .def_readonly("valid", &InspireCommandSnapshot::valid)
+        .def_readonly("sequence", &InspireCommandSnapshot::sequence)
+        .def_readonly("age_seconds", &InspireCommandSnapshot::age_seconds)
+        .def_readonly("q", &InspireCommandSnapshot::q);
+
+    auto from_dict = [](py::dict cfg_dict) {
+        InspireDdsEndpointConfig cfg;
+        if (cfg_dict.contains("domain_id")) cfg.domain_id = cfg_dict["domain_id"].cast<std::int32_t>();
+        if (cfg_dict.contains("net_if")) cfg.net_if = cfg_dict["net_if"].cast<std::string>();
+        if (cfg_dict.contains("cmd_topic")) cfg.cmd_topic = cfg_dict["cmd_topic"].cast<std::string>();
+        if (cfg_dict.contains("state_topic")) cfg.state_topic = cfg_dict["state_topic"].cast<std::string>();
+        return cfg;
+    };
+
+    py::class_<InspireDdsControlEndpoint>(m, "InspireDdsControlEndpoint")
+        .def(py::init([from_dict](py::dict d) {
+            return std::make_unique<InspireDdsControlEndpoint>(from_dict(d));
+        }))
+        .def("get_state", &InspireDdsControlEndpoint::get_state)
+        .def("self_check", &InspireDdsControlEndpoint::self_check)
+        .def("step", &InspireDdsControlEndpoint::step, py::arg("stroke"))
+        .def("close", &InspireDdsControlEndpoint::close);
+
+    py::class_<InspireDdsRobotEndpoint>(m, "InspireDdsRobotEndpoint")
+        .def(py::init([from_dict](py::dict d) {
+            return std::make_unique<InspireDdsRobotEndpoint>(from_dict(d));
+        }))
+        .def("get_command", &InspireDdsRobotEndpoint::get_command)
+        .def("publish_state", &InspireDdsRobotEndpoint::publish_state,
+             py::arg("stroke"), py::arg("stroke_rate"))
+        .def("close", &InspireDdsRobotEndpoint::close);
+}
+
 PYBIND11_MODULE(unitree_cpp, m) {
     m.doc() = "pybind11 bindings for G1DdsControlEndpoint";
 
@@ -187,4 +239,5 @@ PYBIND11_MODULE(unitree_cpp, m) {
     bind_G1DdsControlEndpointConfig(m);
     bind_RobotState(m);
     bind_G1DdsControlEndpoint(m);
+    bind_InspireDdsEndpoint(m);
 }

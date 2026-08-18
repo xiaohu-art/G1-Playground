@@ -20,6 +20,8 @@ class G1MujocoDdsServer:
         lowstate_factory: Callable,
         torque_limits,
         *,
+        body_index=None,
+        hand=None,
         command_timeout: float = 0.1,
         clock: Callable[[], float] | None = None,
         sleeper: Callable[[float], None] | None = None,
@@ -31,6 +33,14 @@ class G1MujocoDdsServer:
         self.robot_endpoint = robot_endpoint
         self.lowstate_factory = lowstate_factory
         self.torque_limits = np.asarray(torque_limits, dtype=np.float64)
+        self.body_index = (
+            np.arange(self.torque_limits.shape[0], dtype=np.int64)
+            if body_index is None
+            else np.asarray(body_index, dtype=np.int64)
+        )
+        if self.body_index.shape != self.torque_limits.shape:
+            raise ValueError("body index must supply one model actuator per torque limit")
+        self.hand = hand
         self.timestep = backend.timestep
         self.command_timeout = command_timeout
         self._clock = time.monotonic if clock is None else clock
@@ -49,8 +59,10 @@ class G1MujocoDdsServer:
         return 1.0 - (active_seconds - SUPPORT_HOLD_SECONDS) / SUPPORT_RELEASE_SECONDS
 
     def command_torque(self, command, state, now: float) -> np.ndarray:
+        joint_pos = np.asarray(state.joint_pos)[self.body_index]
+        joint_vel = np.asarray(state.joint_vel)[self.body_index]
         if not command.valid:
-            return np.zeros_like(state.joint_pos, dtype=np.float64)
+            return np.zeros_like(joint_pos, dtype=np.float64)
         if not np.isfinite(command.age_seconds) or command.age_seconds < 0:
             raise RuntimeError("DDS simulator received an invalid command age")
         if command.age_seconds > self.command_timeout:
@@ -67,16 +79,16 @@ class G1MujocoDdsServer:
         damping = np.asarray(command.kd, dtype=np.float64)
         torque = (
             feedforward
-            + stiffness * (position_target - state.joint_pos)
-            + damping * (velocity_target - state.joint_vel)
+            + stiffness * (position_target - joint_pos)
+            + damping * (velocity_target - joint_vel)
         )
         return np.clip(torque, -self.torque_limits, self.torque_limits)
 
     def publish(self, state) -> int:
         snapshot = self.lowstate_factory()
-        snapshot.q = state.joint_pos.tolist()
-        snapshot.dq = state.joint_vel.tolist()
-        snapshot.tau_est = state.joint_torque.tolist()
+        snapshot.q = np.asarray(state.joint_pos)[self.body_index].tolist()
+        snapshot.dq = np.asarray(state.joint_vel)[self.body_index].tolist()
+        snapshot.tau_est = np.asarray(state.joint_torque)[self.body_index].tolist()
         snapshot.quaternion = state.base_quaternion_wxyz.tolist()
         snapshot.gyroscope = state.base_angular_velocity.tolist()
         return self.robot_endpoint.publish_lowstate(snapshot)
@@ -86,8 +98,17 @@ class G1MujocoDdsServer:
         if not np.isfinite(now):
             raise RuntimeError("DDS simulator clock returned a non-finite value")
         command = self.robot_endpoint.get_command()
-        torque = self.command_torque(command, self._state, now)
+        body_torque = self.command_torque(command, self._state, now)
+
+        torque = np.zeros(self.backend.model.nu, dtype=np.float64)
+        torque[self.body_index] = body_torque
+        if self.hand is not None:
+            hand_index, hand_torque = self.hand.torque(self._state.joint_pos, self._state.joint_vel, now)
+            torque[hand_index] = hand_torque
+
         self._state = self.backend.step(torque, self.support_scale(now))
+        if self.hand is not None:
+            self.hand.publish(self._state.joint_pos, self._state.joint_vel, self.timestep)
         return self.publish(self._state)
 
     def run(self, stop_event=None) -> None:
@@ -107,4 +128,6 @@ class G1MujocoDdsServer:
             self.shutdown()
 
     def shutdown(self) -> bool:
+        if self.hand is not None:
+            self.hand.shutdown()
         return self.robot_endpoint.close()

@@ -37,6 +37,7 @@ message(STATUS "Found ddscxx root include: ${DDSCXX_ROOT_INCLUDE}")
 # this)
 python_add_library(unitree_cpp MODULE
   src/g1_dds_robot_endpoint.cpp
+  src/inspire_dds_endpoint.cpp
   src/py_binding.cpp 
   src/g1_dds_control_endpoint.cpp
   WITH_SOABI

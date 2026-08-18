@@ -91,7 +91,14 @@ class ElasticSupport:
 class G1MujocoBackend:
     """Pure MuJoCo physics for the floating-base 29-DoF G1 model."""
 
-    def __init__(self, xml_path: str, timestep: float = 0.001, *, elastic_support_scale: float = 0.0):
+    def __init__(
+        self,
+        xml_path: str,
+        timestep: float = 0.001,
+        *,
+        elastic_support_scale: float = 0.0,
+        expected_actuators: int = 29,
+    ):
         if (
             isinstance(timestep, bool)
             or not isinstance(timestep, int | float)
@@ -102,9 +109,14 @@ class G1MujocoBackend:
         self.timestep = float(timestep)
         self.model = mujoco.MjModel.from_xml_path(xml_path)  # pyright: ignore[reportAttributeAccessIssue]
         self.model.opt.timestep = self.timestep
-        if self.model.nu != 29:
-            raise ValueError("G1 MuJoCo backend requires exactly 29 actuators")
+        if self.model.nu != expected_actuators:
+            raise ValueError(
+                f"G1 MuJoCo backend requires exactly {expected_actuators} actuators, "
+                f"model has {self.model.nu}"
+            )
         self.data = mujoco.MjData(self.model)  # pyright: ignore[reportAttributeAccessIssue]
+        if self.model.nkey > 0:
+            mujoco.mj_resetDataKeyframe(self.model, self.data, 0)  # pyright: ignore[reportAttributeAccessIssue]
         self._data_lock = Lock()
         self.elastic_support = ElasticSupport(self.model, scale=elastic_support_scale)
         self.step_mujoco()

@@ -17,17 +17,22 @@ def compose_dof_config(robot_dof: DictConfig, policy_dof: DictConfig) -> DictCon
 
 
 class DoFAdapter:
-    def __init__(self, src_joint_names, tar_joint_names):
+    def __init__(self, src_joint_names, tar_joint_names, num_dofs: int = 29):
         src_joint_names = list(src_joint_names)
         tar_joint_names = list(tar_joint_names)
-        if len(src_joint_names) != 29 or len(tar_joint_names) != 29 or set(src_joint_names) != set(tar_joint_names):
-            raise ValueError("DoFAdapter only supports reordering the complete 29-joint G1 set")
-        if len(set(src_joint_names)) != 29:
+        if (
+            len(src_joint_names) != num_dofs
+            or len(tar_joint_names) != num_dofs
+            or set(src_joint_names) != set(tar_joint_names)
+        ):
+            raise ValueError(f"DoFAdapter only supports reordering the complete {num_dofs}-joint set")
+        if len(set(src_joint_names)) != num_dofs:
             raise ValueError("Joint names must be unique")
+        self.num_dofs = num_dofs
         self.indices = [src_joint_names.index(name) for name in tar_joint_names]
 
     def fit(self, data) -> np.ndarray:
         data = np.asarray(data)
-        if data.shape != (29,):
-            raise ValueError(f"DoFAdapter requires one value for each G1 joint, got shape {data.shape}")
+        if data.shape != (self.num_dofs,):
+            raise ValueError(f"DoFAdapter requires one value for each joint, got shape {data.shape}")
         return data[self.indices]

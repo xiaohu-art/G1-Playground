@@ -33,7 +33,7 @@ git clone https://github.com/xiaohu-art/G1-Playground.git
 cd G1-Playground
 conda create -n g1-playground python=3.11 -y
 conda activate g1-playground
-python -m pip install -e .
+pip install -e .
 python scripts/setup/install_third_party.py unitree_cpp
 ```
 

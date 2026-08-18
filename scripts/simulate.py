@@ -1,3 +1,4 @@
+import argparse
 import importlib
 import threading
 import time
@@ -11,7 +12,7 @@ from g1_playground.utils import resolve_repo_path
 RENDER_HZ = 60.0
 
 
-def build_server() -> G1MujocoDdsServer:
+def build_server(inspire: bool = False) -> G1MujocoDdsServer:
     robot = OmegaConf.load(resolve_repo_path("configs/robot/g1.yaml"))
     sim = OmegaConf.load(resolve_repo_path("configs/deployment/sim.yaml"))
     try:
@@ -30,10 +31,39 @@ def build_server() -> G1MujocoDdsServer:
         "mode_machine": 5,
     }
 
+    hand_cfg = None
+    xml_path = robot.xml
+    expected_actuators = 29
+    if inspire:
+        hand_cfg = OmegaConf.load(resolve_repo_path("configs/robot/inspire.yaml"))
+        xml_path = hand_cfg.xml
+        expected_actuators = 53
+
     backend = G1MujocoBackend(
-        resolve_repo_path(robot.xml),
+        resolve_repo_path(xml_path),
         elastic_support_scale=1.0,
+        expected_actuators=expected_actuators,
     )
+
+    body_index = None
+    hand = None
+    if inspire:
+        from g1_playground.inspire import dof as inspire_dof
+        from g1_playground.inspire.mujoco_hand import InspireMujocoHand
+
+        names = inspire_dof.actuator_names(backend.model)
+        body_index = [names.index(joint) for joint in robot.dof.joint_names]
+        hand = InspireMujocoHand(
+            backend.model,
+            hand_cfg.dof,
+            hand_cfg.mimic,
+            domain_id=sim.env.domain_id,
+            net_if=sim.env.net_if,
+            stiffness=hand_cfg.sim.stiffness,
+            damping=hand_cfg.sim.damping,
+            torque_limit=hand_cfg.sim.torque_limit,
+        )
+
     robot_endpoint = None
     try:
         robot_endpoint = unitree_cpp.G1DdsRobotEndpoint(endpoint)
@@ -42,10 +72,14 @@ def build_server() -> G1MujocoDdsServer:
             robot_endpoint,
             unitree_cpp.DdsLowStateSnapshot,
             robot.dof.torque_limits,
+            body_index=body_index,
+            hand=hand,
         )
     except BaseException:
         if robot_endpoint is not None:
             robot_endpoint.close()
+        if hand is not None:
+            hand.shutdown()
         raise
 
 
@@ -108,9 +142,17 @@ def run_with_viewer(server: G1MujocoDdsServer) -> None:
 def run() -> None:
     from g1_playground.utils.logger import setup_logger
 
+    parser = argparse.ArgumentParser(description="G1 MuJoCo DDS simulator with a mandatory viewer")
+    parser.add_argument(
+        "--inspire",
+        action="store_true",
+        help="load the G1 model with Inspire hands and serve rt/inspire/cmd and rt/inspire/state",
+    )
+    args = parser.parse_args()
+
     setup_logger()
     try:
-        server = build_server()
+        server = build_server(inspire=args.inspire)
         run_with_viewer(server)
     except KeyboardInterrupt:
         return

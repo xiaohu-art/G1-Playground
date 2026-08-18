@@ -7,6 +7,7 @@ defaults:
   - _self_
 
 device: cpu
+inspire_service: false
 
 env:
   _target_: g1_playground.g1_env.G1Env
