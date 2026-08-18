@@ -21,7 +21,7 @@ server retains the repository-owned `G1MujocoBackend` physics core and always op
 
 The policy observes and commands all 29 joints. Its 50 Hz rate, five-frame field-major history, and 480-to-29 layout are
 class-level checkpoint contracts; they are not deployment tuning fields. The checkpoint is stored at
-`assets/models/g1/unitree/policy_wo_gait.pt`.
+`assets/models/unitree/policy_wo_gait.pt`.
 
 ## Installation
 

@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
+from g1_playground.policy.base_policy import BasePolicy
 from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import DoFAdapter
 from g1_playground.utils.math import get_gravity_orientation
@@ -13,7 +14,7 @@ from g1_playground.utils.math import get_gravity_orientation
 logger = logging.getLogger(__name__)
 
 
-class UnitreeWoGaitPolicy:
+class UnitreeWoGaitPolicy(BasePolicy):
     FREQ = 50
     HISTORY_LENGTH = 5
     HISTORY_LAYOUT = (
@@ -27,17 +28,9 @@ class UnitreeWoGaitPolicy:
 
     def __init__(self, cfg_policy: DictConfig, device: str, dof_cfg: DictConfig):
         dof = cfg_policy.dof
-        if len(dof.joint_names) != 29 or len(set(dof.joint_names)) != 29:
-            raise ValueError("Policy DoF config requires 29 unique G1 joints")
-        for field in ("default_pos", "stiffness", "damping"):
-            if len(dof[field]) != 29:
-                raise ValueError(f"Policy DoF field {field!r} must contain 29 values")
-
         if device == "auto":
             device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = device
-        self.freq = self.FREQ
-        self.dt = 1.0 / self.freq
+        super().__init__(device)
 
         self.num_dofs = len(dof.joint_names)
         self.default_pos = np.asarray(dof.default_pos)

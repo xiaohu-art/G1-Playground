@@ -22,10 +22,12 @@ class TestHydraConfig(unittest.TestCase):
             yaml_files,
             {
                 "run_pipeline.yaml",
+                "run_track.yaml",
                 "deployment/sim.yaml",
                 "deployment/real.yaml",
                 "robot/g1.yaml",
                 "policy/unitree_wo_gait.yaml",
+                "policy/track.yaml",
             },
         )
         self.assertFalse((REPO_ROOT / "g1_playground/config").exists())

@@ -83,7 +83,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
 
             from pathlib import Path
             from hydra import compose, initialize_config_dir
-            from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
+            from g1_playground.policy.unitree import UnitreeWoGaitPolicy
             from g1_playground.utils.dof import compose_dof_config
             from tests.config_helpers import load_pipeline_launcher
 

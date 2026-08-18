@@ -15,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DEPLOYMENTS = {"sim", "real"}
 EXPECTED_POLICIES = {"UnitreeWoGaitPolicy"}
 EXPECTED_CONTROLLERS = {"JoystickCtrl", "UnitreeCtrl"}
-EXPECTED_CHECKPOINT = REPO_ROOT / "assets/models/g1/unitree/policy_wo_gait.pt"
+EXPECTED_CHECKPOINT = REPO_ROOT / "assets/models/unitree/policy_wo_gait.pt"
 EXPECTED_COMPONENTS = {
     "sim": (
         "g1_playground.g1_env.G1Env",
@@ -84,7 +84,7 @@ class TestFullImports(unittest.TestCase):
 
         self.assertEqual(checkpoints, {EXPECTED_CHECKPOINT})
 
-        model_root = EXPECTED_CHECKPOINT.parents[1]
+        model_root = EXPECTED_CHECKPOINT.parents[0]
         retained_checkpoints = {path.resolve() for path in model_root.rglob("*") if path.suffix in {".onnx", ".pt"}}
         self.assertEqual(retained_checkpoints, {EXPECTED_CHECKPOINT})
 
@@ -142,7 +142,7 @@ class TestFullImports(unittest.TestCase):
     def test_explicit_component_imports(self):
         from g1_playground.controller.joystick_ctrl import JoystickCtrl
         from g1_playground.controller.unitree_ctrl import UnitreeCtrl
-        from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
+        from g1_playground.policy.unitree import UnitreeWoGaitPolicy
 
         self.assertEqual({UnitreeWoGaitPolicy.__name__}, EXPECTED_POLICIES)
         self.assertEqual({JoystickCtrl.__name__, UnitreeCtrl.__name__}, EXPECTED_CONTROLLERS)
@@ -191,7 +191,7 @@ class TestFullImports(unittest.TestCase):
         self.assertEqual(tuple(output.shape), (1, 29))
 
     def test_wogait_observation_and_action(self):
-        from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
+        from g1_playground.policy.unitree import UnitreeWoGaitPolicy
         from g1_playground.utils.dof import compose_dof_config
 
         cfg = compose_config("sim")
@@ -213,7 +213,7 @@ class TestFullImports(unittest.TestCase):
         self.assertEqual(policy.act(env_data, ctrl_data).shape, (29,))
 
     def test_robot_asset_closure(self):
-        robot_root = EXPECTED_CHECKPOINT.parents[3] / "robots/g1"
+        robot_root = EXPECTED_CHECKPOINT.parents[2] / "robots/g1"
         xml_path = robot_root / "g1_29dof_rev_1_0.xml"
         self.assertEqual(set(robot_root.glob("*.xml")), {xml_path})
 

@@ -1,0 +1,19 @@
+defaults:
+  - robot: g1
+  - policy: track
+  - deployment: sim
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+  - _self_
+
+device: cpu
+
+env:
+  _target_: g1_playground.g1_env.G1Env
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

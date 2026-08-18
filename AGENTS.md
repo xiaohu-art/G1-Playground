@@ -38,7 +38,7 @@ registries without an explicit architecture decision and tests.
   does not make the backend optional. Keep the hot path at one cached input state and one
   `backend.step(torque, support_scale)` per tick. That locked call sets support, advances physics, and returns the single
   new detached/read-only snapshot. `G1MujocoBackend.timestep` is the sole physics-period owner; do not add a server copy.
-- `assets/robots/g1/` and `assets/models/g1/unitree/`: the 29DoF XML/meshes and sole TorchScript checkpoint.
+- `assets/robots/g1/` and `assets/models/unitree/`: the 29DoF XML/meshes and sole TorchScript checkpoint.
 - `scripts/simulate.py`: the standalone simulator assembly root. It reads the existing
   `configs/robot/g1.yaml` and `configs/deployment/sim.yaml` fragments directly; there is no second Hydra root for the
   server. The backend default owns the 1 ms physics/DDS period, the server default owns its 0.1-second watchdog, and the

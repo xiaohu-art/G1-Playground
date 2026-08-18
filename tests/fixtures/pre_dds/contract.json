@@ -286,7 +286,7 @@
   },
   "assets": {
     "checkpoint": {
-      "path": "assets/models/g1/unitree/policy_wo_gait.pt",
+      "path": "assets/models/unitree/policy_wo_gait.pt",
       "bytes": 1669152,
       "sha256": "b5861e91bba86cdb35dc10de9764e26336042c817e179ddcebc3427828677414"
     },
@@ -298,7 +298,7 @@
     "closure": {
       "file_count": 37,
       "total_bytes": 21361597,
-      "sha256": "d48420d284522462ab662ea9b405937494e9dee0f6b5efd9782865231c07f406"
+      "sha256": "0ed954b9e753c36ab68d02d3a842cc9339de6906028d0cc10b83f42bf384c465"
     }
   },
   "vendors": {

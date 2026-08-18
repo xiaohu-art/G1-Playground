@@ -1,6 +1,6 @@
 # @package policy
 
-policy_file: assets/models/g1/unitree/policy_wo_gait.pt
+policy_file: assets/models/unitree/policy_wo_gait.pt
 dof:
   joint_names:
     - left_hip_pitch_joint

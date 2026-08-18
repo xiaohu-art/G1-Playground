@@ -71,7 +71,7 @@ After replacing or re-exporting the checkpoint, verify its fixed shape:
 python - <<'PY'
 import torch
 
-model = torch.jit.load("assets/models/g1/unitree/policy_wo_gait.pt", map_location="cpu")
+model = torch.jit.load("assets/models/unitree/policy_wo_gait.pt", map_location="cpu")
 action = model(torch.zeros(1, 480))
 assert tuple(action.shape) == (1, 29), action.shape
 print("checkpoint shape OK")

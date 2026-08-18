@@ -12,7 +12,7 @@ import mujoco
 import numpy as np
 import torch
 
-from g1_playground.policy.unitree_policy import UnitreeWoGaitPolicy
+from g1_playground.policy.unitree import UnitreeWoGaitPolicy
 from g1_playground.utils.dof import DoFAdapter, compose_dof_config
 from tests.config_helpers import compose_config
 
@@ -31,7 +31,7 @@ def sha256_file(path: Path) -> str:
 
 
 def asset_closure() -> dict[str, int | str]:
-    roots = (REPO_ROOT / "assets/models/g1", REPO_ROOT / "assets/robots/g1")
+    roots = (REPO_ROOT / "assets/models/unitree", REPO_ROOT / "assets/robots/g1")
     files = sorted(path for root in roots for path in root.rglob("*") if path.is_file())
     digest = hashlib.sha256()
     total_bytes = 0

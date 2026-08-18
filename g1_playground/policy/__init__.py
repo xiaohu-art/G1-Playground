@@ -1,3 +1,4 @@
-from .unitree_policy import UnitreeWoGaitPolicy
+from .base_policy import BasePolicy
+from .unitree import UnitreeWoGaitPolicy
 
-__all__ = ["UnitreeWoGaitPolicy"]
+__all__ = ["BasePolicy", "UnitreeWoGaitPolicy"]
