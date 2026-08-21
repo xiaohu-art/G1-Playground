@@ -10,6 +10,9 @@ def setup_logger(name: str = "g1_playground") -> logging.Logger:
         return logger
 
     logger.disabled = False
+    for existing_name, existing in logging.root.manager.loggerDict.items():
+        if isinstance(existing, logging.Logger) and existing_name.startswith(f"{name}."):
+            existing.disabled = False
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 

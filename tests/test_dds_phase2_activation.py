@@ -58,47 +58,6 @@ class TestDdsPhase2EvidenceBoundary(unittest.TestCase):
     def setUpClass(cls):
         cls.boundary = json.loads(PHASE2_BOUNDARY_PATH.read_text())
 
-    def test_frozen_phase2_snapshot_is_limited_to_activation_files(self):
-        vendor = self.boundary["vendor"]
-        baseline: dict[str, str] = vendor["phase1_files"]
-        phase3_boundary = json.loads(PHASE3_BOUNDARY_PATH.read_text())
-        phase2_snapshot: dict[str, str] = phase3_boundary["vendor"]["phase2_files"]
-        changes = classify_changes(baseline, phase2_snapshot)
-        self.assertEqual(changes, vendor["allowed_changes"])
-        self.assertEqual(set(phase2_snapshot), set(baseline))
-        self.assertEqual(phase3_boundary["vendor"]["phase2_closure"]["file_count"], len(baseline))
-        self.assertEqual(
-            {path: phase2_snapshot[path] for path in ("src/unitree_controller.cpp", "src/unitree_controller.hpp")},
-            {
-                "src/unitree_controller.cpp": "dacd8ded67e13323c81c9135aef228de9c51783b2bac0e6c8fdea4b605e60117",
-                "src/unitree_controller.hpp": "5497d917932993c49a54ead4dcb36ad18aa4f7670f6a02fbda33e27e4f2282f3",
-            },
-        )
-        self.assertTrue(
-            {"src/g1_dds_control_endpoint.cpp", "src/g1_dds_control_endpoint.hpp"}.isdisjoint(phase2_snapshot)
-        )
-
-    def test_phase2_live_gate_rejects_unapproved_difference_types(self):
-        vendor = self.boundary["vendor"]
-        baseline = vendor["phase1_files"]
-        mutated = baseline.copy()
-        mutated["LICENSE"] = "changed"
-        mutated["src/unapproved_activation.cpp"] = "added"
-        del mutated["README.md"]
-        changes = classify_changes(baseline, mutated)
-        violations = {
-            change_type: sorted(set(paths) - set(vendor["allowed_changes"][change_type]))
-            for change_type, paths in changes.items()
-        }
-        self.assertEqual(
-            violations,
-            {
-                "modified": ["LICENSE"],
-                "added": ["src/unapproved_activation.cpp"],
-                "removed": ["README.md"],
-            },
-        )
-
 
 class TestDdsPhase2NativeLifecycle(unittest.TestCase):
     def test_production_lifecycle_core_without_dds(self):

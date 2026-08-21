@@ -8,6 +8,11 @@ defaults:
 
 device: cpu
 
+recording:
+  enabled: false
+  seconds: 1200
+  directory: logs
+
 env:
   _target_: g1_playground.g1_env.G1Env
 

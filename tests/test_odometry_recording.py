@@ -13,13 +13,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULE_NAME = "g1_playground.g1_env"
 
 
-def load_pipeline():
-    spec = importlib.util.spec_from_file_location("g1_pipeline_recorder", REPO_ROOT / "scripts/pipeline.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 class FakeControlEndpoint:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -93,10 +86,10 @@ class TestReadOdometry(unittest.TestCase):
         self.assertIsNotNone(self.env.read_odometry())
 
 
-class TestPipelineRecorder(unittest.TestCase):
+class TestRecorder(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.pipeline = load_pipeline()
+        cls.recorder = importlib.import_module("g1_playground.utils.recorder")
 
     def state(self):
         return SimpleNamespace(
@@ -107,8 +100,8 @@ class TestPipelineRecorder(unittest.TestCase):
         )
 
     def test_records_nan_when_odometry_is_absent(self):
-        log = self.pipeline.recorder(4)
-        self.pipeline.record(log, 0.0, self.state(), np.zeros(29), None)
+        log = self.recorder.recorder(4)
+        self.recorder.record(log, 0.0, self.state(), np.zeros(29), None)
         self.assertEqual(log.count, 1)
         self.assertTrue(np.isnan(log.base_pos[0]).all())
         self.assertTrue(np.isnan(log.base_lin_vel[0]).all())
@@ -118,18 +111,27 @@ class TestPipelineRecorder(unittest.TestCase):
         odometry = SimpleNamespace(
             position=np.array([1.0, 2.0, 0.3]), velocity=np.array([0.4, 0.0, 0.0]), body_height=0.75033
         )
-        log = self.pipeline.recorder(4)
-        self.pipeline.record(log, 0.02, self.state(), np.ones(29), odometry)
+        log = self.recorder.recorder(4)
+        self.recorder.record(log, 0.02, self.state(), np.ones(29), odometry)
         np.testing.assert_allclose(log.base_pos[0], [1.0, 2.0, 0.3])
         np.testing.assert_allclose(log.base_lin_vel[0], [0.4, 0.0, 0.0])
         self.assertAlmostEqual(float(log.body_height[0]), 0.75033, places=5)
 
     def test_capacity_is_never_exceeded(self):
-        log = self.pipeline.recorder(2)
+        log = self.recorder.recorder(2)
         for index in range(5):
-            self.pipeline.record(log, 0.02 * index, self.state(), np.zeros(29), None)
+            self.recorder.record(log, 0.02 * index, self.state(), np.zeros(29), None)
         self.assertEqual(log.count, 2)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class TestRecordingIsHydraControlled(unittest.TestCase):
+    def test_both_roots_default_to_disabled(self):
+        from omegaconf import OmegaConf
+
+        for name in ("run_pipeline", "run_loco_track"):
+            with self.subTest(root=name):
+                root = OmegaConf.load(REPO_ROOT / f"configs/{name}.yaml")
+                self.assertIn("recording", root)
+                self.assertEqual(set(root.recording), {"enabled", "seconds", "directory"})
+                self.assertIs(root.recording.enabled, False)
+                self.assertGreater(root.recording.seconds, 0)

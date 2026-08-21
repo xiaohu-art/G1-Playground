@@ -21,13 +21,14 @@ import hydra
 import numpy as np
 import torch
 from hydra.utils import instantiate
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from g1_playground.policy import UnitreeWoGaitPolicy
 from g1_playground.policy.track import TrackPolicy
 from g1_playground.utils.dof import compose_dof_config
 from g1_playground.utils.logger import setup_logger
 from g1_playground.utils.math import is_upright
+from g1_playground.utils.recorder import record, recorder, save_recording
 
 logger = logging.getLogger("g1_playground")
 RAMP_SECONDS = 3.0
@@ -126,6 +127,7 @@ def run(cfg: DictConfig) -> None:
     torch.set_num_threads(1)
     env = None
     saved_terminal = None
+    log = None
     try:
         dof_loco = compose_dof_config(cfg.robot.dof, cfg.loco.dof)
         dof_track = compose_dof_config(cfg.robot.dof, cfg.track.dof)
@@ -133,6 +135,8 @@ def run(cfg: DictConfig) -> None:
         track = TrackPolicy(cfg.track, device=cfg.device, dof_cfg=dof_track)
         env = instantiate(cfg.env, dof_cfg=dof_loco, control_dt=loco.dt)
         controller = instantiate(cfg.controller, env=env)
+        if cfg.recording.enabled:
+            log = recorder(int(cfg.recording.seconds * loco.freq))
         plan = SimpleNamespace(
             ramp_steps=int(RAMP_SECONDS * loco.freq),
             blend_steps=int(BLEND_SECONDS * loco.freq),
@@ -161,6 +165,7 @@ def run(cfg: DictConfig) -> None:
         frames = commands(env, loco, track, plan, state.dof_pos, loco.standing_target)
         next(frames)
         env.activate_commands()
+        origin = time.monotonic()
 
         while True:
             started = time.monotonic()
@@ -169,13 +174,17 @@ def run(cfg: DictConfig) -> None:
                 break
             state, control = frame
             requested, key_descriptor = poll_switch_key(key_descriptor)
-            env.step(frames.send((state, control, requested)))
+            command = frames.send((state, control, requested))
+            env.step(command)
+            record(log, started - origin, state, command, env.read_odometry())
             if pace(started, loco.dt) < -FRAME_DROP_LIMIT:
                 logger.critical("Exiting due to excessive frame drop")
                 break
     except KeyboardInterrupt:
         logger.info("Interrupted by operator")
     finally:
+        if log is not None:
+            save_recording(log, cfg.recording.directory, OmegaConf.to_yaml(cfg, resolve=True))
         if saved_terminal is not None:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved_terminal)
         if env is not None:

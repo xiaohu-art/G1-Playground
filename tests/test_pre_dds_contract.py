@@ -1,7 +1,6 @@
 import hashlib
 import importlib
 import json
-import re
 import sys
 import types
 import unittest
@@ -13,7 +12,7 @@ import numpy as np
 import torch
 
 from g1_playground.policy.unitree import UnitreeWoGaitPolicy
-from g1_playground.utils.dof import DoFAdapter, compose_dof_config
+from g1_playground.utils.dof import compose_dof_config
 from tests.config_helpers import compose_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

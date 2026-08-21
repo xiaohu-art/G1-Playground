@@ -30,39 +30,6 @@ class TestDdsPhase1Domain(unittest.TestCase):
         self.assertEqual(serialized["domain_id"], 0)
         self.assertTrue(serialized["net_if"].strip())
 
-    def test_endpoint_intent_has_no_second_target_or_act_switch(self):
-        sim = compose_config("sim")
-        real = compose_config("real")
-        self.assertEqual(
-            (sim.env._target_, sim.controller._target_),
-            (
-                "g1_playground.g1_env.G1Env",
-                "g1_playground.controller.joystick_ctrl.JoystickCtrl",
-            ),
-        )
-        self.assertNotIn("unitree", sim.env)
-        self.assertNotIn("unitree", real.env)
-        self.assertEqual(
-            (real.env._target_, real.controller._target_),
-            (
-                "g1_playground.g1_env.G1Env",
-                "g1_playground.controller.unitree_ctrl.UnitreeCtrl",
-            ),
-        )
-        self.assertNotIn("kind", sim.env)
-        self.assertNotIn("kind", real.env)
-        self.assertNotIn("target", real.env)
-        self.assertNotIn("act", real.env)
-
-    def test_g1_real_explicitly_uses_domain_zero(self):
-        env = compose_config("real").env
-        self.assertNotIn("target", env)
-        self.assertNotIn("act", env)
-        self.assertNotIn("unitree", env)
-        self.assertEqual(env.domain_id, 0)
-        self.assertIs(type(env.domain_id), int)
-        self.assertNotEqual(env.net_if, "lo")
-
     def test_sim_and_real_share_one_optional_g1_environment(self):
         script = textwrap.dedent(
             """

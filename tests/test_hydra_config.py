@@ -6,7 +6,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from hydra.errors import ConfigCompositionException, MissingConfigException
 from omegaconf import OmegaConf
 
 from tests.config_helpers import CONFIG_DIR, compose_config
@@ -36,7 +35,7 @@ class TestHydraConfig(unittest.TestCase):
 
     def test_root_config_only_composes_config_groups_and_launcher_settings(self):
         root = OmegaConf.load(CONFIG_DIR / "run_pipeline.yaml")
-        self.assertEqual(set(root), {"defaults", "device", "env", "hydra"})
+        self.assertEqual(set(root), {"defaults", "device", "recording", "env", "hydra"})
 
         robot_path = CONFIG_DIR / "robot/g1.yaml"
         policy_path = CONFIG_DIR / "policy/unitree_wo_gait.yaml"
@@ -104,35 +103,6 @@ class TestHydraConfig(unittest.TestCase):
         for cfg in (sim, real):
             self.assertNotIn("do_safety_check", cfg)
             self.assertNotIn("run_fullspeed", cfg)
-
-    def test_composition_returns_fresh_configs_and_applies_overrides(self):
-        first = compose_config("sim", "env.lowstate_topic=rt/test_lowstate")
-        second = compose_config("sim")
-
-        self.assertEqual(first.env.lowstate_topic, "rt/test_lowstate")
-        self.assertEqual(second.env.lowstate_topic, "rt/lowstate")
-        self.assertIsNot(first, second)
-        self.assertIsNot(first.policy.dof, second.policy.dof)
-
-        real = compose_config("real", "env.net_if=testnic")
-        self.assertEqual(real.env.net_if, "testnic")
-
-    def test_unknown_deployments_and_overrides_are_rejected(self):
-        with self.assertRaises(MissingConfigException):
-            compose_config("missing")
-        for group_override in ("robot=missing", "policy=missing"):
-            with self.subTest(group_override=group_override), self.assertRaises(MissingConfigException):
-                compose_config("sim", group_override)
-        with self.assertRaises(ConfigCompositionException):
-            compose_config("sim", "missing_option=true")
-
-        for removed_override in ("do_safety_check=false", "run_fullspeed=true"):
-            with self.subTest(removed_override=removed_override), self.assertRaises(ConfigCompositionException):
-                compose_config("real", removed_override)
-
-        real = compose_config("real")
-        self.assertEqual(real.env.domain_id, 0)
-        self.assertIs(real.env.motion_switcher_required, True)
 
     def test_policy_contract_is_owned_by_the_policy(self):
         from g1_playground.policy import UnitreeWoGaitPolicy

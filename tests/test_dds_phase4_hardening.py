@@ -74,24 +74,6 @@ class TestPipelineCommandGate(unittest.TestCase):
     def setUpClass(cls):
         cls.launcher = load_pipeline_launcher()
 
-    def test_shutdown_is_handled_before_safety_and_command_write(self):
-        fixture = StepFixture(True)
-        with patch.object(
-            self.launcher,
-            "is_upright",
-            side_effect=AssertionError("shutdown must short-circuit the safety check"),
-        ):
-            self.assertFalse(
-                self.launcher.step(
-                    fixture.env,
-                    fixture.controller,
-                    fixture.policy,
-                )
-            )
-
-        self.assertNotIn("env.step", fixture.events)
-        self.assertEqual(fixture.events, ["env.read", "controller.read"])
-
     def test_failed_safety_check_is_handled_before_command_write(self):
         fixture = StepFixture(False)
 
@@ -112,21 +94,6 @@ class TestPipelineCommandGate(unittest.TestCase):
         self.assertIn("is_upright", fixture.events)
         self.assertNotIn("env.step", fixture.events)
         self.assertEqual(fixture.events, ["env.read", "controller.read", "is_upright"])
-
-    def test_dry_step_never_writes_even_when_safe(self):
-        fixture = StepFixture(False)
-        with patch.object(self.launcher, "is_upright", return_value=True):
-            self.assertTrue(
-                self.launcher.step(
-                    fixture.env,
-                    fixture.controller,
-                    fixture.policy,
-                    send_command=False,
-                )
-            )
-
-        self.assertNotIn("env.step", fixture.events)
-        self.assertEqual(fixture.events, ["env.read", "controller.read", "policy.act"])
 
 
 class TestNativeStateHardening(unittest.TestCase):

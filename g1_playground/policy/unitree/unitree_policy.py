@@ -33,6 +33,9 @@ class UnitreeWoGaitPolicy(BasePolicy):
         super().__init__(device)
 
         self.num_dofs = len(dof.joint_names)
+        for field in ("default_pos", "stiffness", "damping"):
+            if len(getattr(dof, field)) != self.num_dofs:
+                raise ValueError(f"UnitreeWoGaitPolicy requires one {field} value for each of {self.num_dofs} joints")
         self.default_pos = np.asarray(dof.default_pos)
 
         policy_file = resolve_repo_path(cfg_policy.policy_file)

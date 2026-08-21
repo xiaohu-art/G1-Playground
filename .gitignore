@@ -129,3 +129,6 @@ profile_output*
 *.wbproj
 logs
 MUJOCO_LOG.TXT
+
+# Claude Code session state and agent worktrees
+.claude/

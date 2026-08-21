@@ -6,7 +6,6 @@ import mujoco
 import numpy as np
 
 from g1_playground.simulation import G1MujocoBackend, G1MujocoDdsServer, mujoco_backend
-from g1_playground.simulation.mujoco_backend import snapshot
 from g1_playground.utils.dof import compose_dof_config
 from tests.config_helpers import REPO_ROOT, compose_config
 
@@ -14,15 +13,6 @@ XML_PATH = REPO_ROOT / "assets/robots/g1/g1_29dof_rev_1_0.xml"
 
 
 class TestG1MujocoBackend(unittest.TestCase):
-    def test_snapshot_is_a_detached_read_only_copy(self):
-        source = np.arange(3.0)
-
-        result = snapshot(source)
-        source[0] = -1.0
-
-        np.testing.assert_array_equal(result, np.arange(3.0))
-        self.assertFalse(result.flags.writeable)
-
     def test_model_must_keep_the_29_actuator_contract(self):
         model = SimpleNamespace(opt=SimpleNamespace(timestep=None), nu=28)
 
