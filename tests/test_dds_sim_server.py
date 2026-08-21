@@ -296,7 +296,7 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
 
         backend = FakeBackend()
 
-        def fake_backend(xml, *, elastic_support_scale):
+        def fake_backend(xml, *, elastic_support_scale, expected_actuators=29):
             captured["backend_args"] = (xml, elastic_support_scale)
             return backend
 
@@ -329,7 +329,7 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
         args, kwargs = captured["server"]
         self.assertEqual(args[:3], (backend, captured["bridge"], LowStateSnapshot))
         self.assertEqual(len(args[3]), 29)
-        self.assertEqual(kwargs, {})
+        self.assertEqual(kwargs, {"body_index": None, "hand": None})
 
     def test_run_always_uses_viewer_path(self):
         launcher = load_launcher()
@@ -341,7 +341,7 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
             patch.object(launcher, "build_server", return_value=server),
             patch.object(launcher, "run_with_viewer") as run_with_viewer,
         ):
-            launcher.run()
+            launcher.run([])
 
         setup_logger.assert_called_once_with()
         server.run.assert_not_called()

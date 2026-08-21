@@ -1,0 +1,24 @@
+defaults:
+  - robot: g1
+  - policy@loco: unitree_wo_gait
+  - policy@track: track
+  - deployment: sim
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+  - _self_
+
+device: cpu
+
+handover:
+  crossfade_seconds: 2.0
+  rate_limit: 0.05
+
+env:
+  _target_: g1_playground.g1_env.G1Env
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

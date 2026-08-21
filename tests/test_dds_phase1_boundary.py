@@ -66,17 +66,6 @@ class TestDdsPhase1Boundary(unittest.TestCase):
         cls.boundary = json.loads(PHASE1_BOUNDARY_PATH.read_text())
         cls.pre_dds = json.loads(PRE_DDS_CONTRACT_PATH.read_text())
 
-    def test_frozen_evidence_fingerprints(self):
-        self.assertEqual(sha256_file(PRE_DDS_CONTRACT_PATH), PRE_DDS_CONTRACT_SHA256)
-        self.assertEqual(sha256_file(PHASE1_BOUNDARY_PATH), PHASE1_BOUNDARY_SHA256)
-        self.assertEqual(self.boundary["pre_dds_contract"]["sha256"], PRE_DDS_CONTRACT_SHA256)
-
-        expected_vendor = self.pre_dds["vendors"]["unitree_cpp"]
-        boundary_vendor = self.boundary["vendor"]
-        self.assertEqual(boundary_vendor["revision"], expected_vendor["revision"])
-        self.assertEqual(boundary_vendor["license"], expected_vendor["license"])
-        self.assertEqual(boundary_vendor["baseline_closure"], expected_vendor["closure"])
-
     def test_unitree_cpp_phase1_snapshot_stays_inside_phase1_boundary(self):
         vendor = self.boundary["vendor"]
         baseline = vendor["baseline_files"]

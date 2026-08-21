@@ -263,6 +263,12 @@ void G1DdsControlEndpoint::SportStateHandler(const void* message) {
     SportState sport_state_tmp;
     sport_state_tmp.position = estimator_state.position();
     sport_state_tmp.velocity = estimator_state.velocity();
+    sport_state_tmp.body_height = estimator_state.body_height();
+    if (!AllFinite(sport_state_tmp.position) || !AllFinite(sport_state_tmp.velocity) ||
+        !std::isfinite(sport_state_tmp.body_height) || sport_state_tmp.body_height <= 0.0F) {
+        return;
+    }
+    sport_state_tmp.received_at = SteadyClock::now();
     sport_state_buffer_.SetData(sport_state_tmp);
 }
 
@@ -584,11 +590,14 @@ RobotState G1DdsControlEndpoint::get_robot_state() {
 SportState G1DdsControlEndpoint::get_sport_state() {
     const std::shared_ptr<const SportState> sport_state = sport_state_buffer_.GetData();
 
-    if (sport_state) {
-        return *sport_state;
-    } else {
+    if (!sport_state) {
         throw std::runtime_error("Sport state data is not available");
     }
+    if (!unitree_cpp_detail::IsFreshTimestamp(
+            sport_state->received_at, SteadyClock::now(), ControlEndpointTimeout(cfg_))) {
+        throw std::runtime_error("Sport state data is stale");
+    }
+    return *sport_state;
 }
 
 int main(int argc, char const* argv[]) {

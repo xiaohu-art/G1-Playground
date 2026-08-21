@@ -125,8 +125,10 @@ struct RobotState {
 };
 
 struct SportState {
-    std::array<float, 3> position;
-    std::array<float, 3> velocity;
+    std::array<float, 3> position{};
+    std::array<float, 3> velocity{};
+    float body_height = 0.0F;
+    std::chrono::steady_clock::time_point received_at;
 };
 
 enum class Mode {

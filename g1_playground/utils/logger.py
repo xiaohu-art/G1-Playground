@@ -9,6 +9,7 @@ def setup_logger(name: str = "g1_playground") -> logging.Logger:
     if logger.handlers:
         return logger
 
+    logger.disabled = False
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 

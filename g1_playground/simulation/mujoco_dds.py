@@ -41,6 +41,8 @@ class G1MujocoDdsServer:
         if self.body_index.shape != self.torque_limits.shape:
             raise ValueError("body index must supply one model actuator per torque limit")
         self.hand = hand
+        actuators = getattr(getattr(backend, "model", None), "nu", None)
+        self.num_actuators = int(actuators) if actuators is not None else int(self.torque_limits.shape[0])
         self.timestep = backend.timestep
         self.command_timeout = command_timeout
         self._clock = time.monotonic if clock is None else clock
@@ -100,7 +102,7 @@ class G1MujocoDdsServer:
         command = self.robot_endpoint.get_command()
         body_torque = self.command_torque(command, self._state, now)
 
-        torque = np.zeros(self.backend.model.nu, dtype=np.float64)
+        torque = np.zeros(self.num_actuators, dtype=np.float64)
         torque[self.body_index] = body_torque
         if self.hand is not None:
             hand_index, hand_torque = self.hand.torque(self._state.joint_pos, self._state.joint_vel, now)

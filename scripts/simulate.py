@@ -139,7 +139,7 @@ def run_with_viewer(server: G1MujocoDdsServer) -> None:
         raise worker_errors[0]
 
 
-def run() -> None:
+def run(argv=None) -> None:
     from g1_playground.utils.logger import setup_logger
 
     parser = argparse.ArgumentParser(description="G1 MuJoCo DDS simulator with a mandatory viewer")
@@ -148,7 +148,7 @@ def run() -> None:
         action="store_true",
         help="load the G1 model with Inspire hands and serve rt/inspire/cmd and rt/inspire/state",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     setup_logger()
     try:

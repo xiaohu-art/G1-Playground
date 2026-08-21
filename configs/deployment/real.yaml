@@ -5,6 +5,7 @@ env:
   net_if: enP8p1s0
   lowcmd_topic: rt/lowcmd
   lowstate_topic: rt/lowstate
+  enable_odometry: true
   motion_switcher_required: true
 
 controller:

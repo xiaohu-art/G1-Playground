@@ -5,6 +5,7 @@ env:
   net_if: lo
   lowcmd_topic: rt/lowcmd
   lowstate_topic: rt/lowstate
+  enable_odometry: false
   motion_switcher_required: false
 
 controller:

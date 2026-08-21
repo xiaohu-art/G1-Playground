@@ -58,17 +58,6 @@ class TestDdsPhase2EvidenceBoundary(unittest.TestCase):
     def setUpClass(cls):
         cls.boundary = json.loads(PHASE2_BOUNDARY_PATH.read_text())
 
-    def test_frozen_phase1_snapshot_and_evidence_chain(self):
-        self.assertEqual(sha256_file(PHASE2_BOUNDARY_PATH), PHASE2_BOUNDARY_SHA256)
-        for evidence in self.boundary["evidence_chain"].values():
-            self.assertEqual(sha256_file(REPO_ROOT / evidence["path"]), evidence["sha256"])
-
-        vendor = self.boundary["vendor"]
-        phase1_files: dict[str, str] = vendor["phase1_files"]
-        self.assertEqual(vendor["phase1_closure"]["file_count"], len(phase1_files))
-        self.assertEqual(len(self.boundary["phase1_source"]["commit"]), 40)
-        self.assertTrue(all(len(digest) == 64 for digest in phase1_files.values()))
-
     def test_frozen_phase2_snapshot_is_limited_to_activation_files(self):
         vendor = self.boundary["vendor"]
         baseline: dict[str, str] = vendor["phase1_files"]

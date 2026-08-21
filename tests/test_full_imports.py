@@ -42,6 +42,8 @@ EXPECTED_UNITREE_CPP_FILES = {
     "src/g1_dds_control_endpoint.hpp",
     "src/g1_dds_robot_endpoint.cpp",
     "src/g1_dds_robot_endpoint.hpp",
+    "src/inspire_dds_endpoint.cpp",
+    "src/inspire_dds_endpoint.hpp",
     "src/py_binding.cpp",
     "src/unitree_cpp/__init__.py",
 }

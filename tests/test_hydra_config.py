@@ -23,9 +23,11 @@ class TestHydraConfig(unittest.TestCase):
             {
                 "run_pipeline.yaml",
                 "run_track.yaml",
+                "run_loco_track.yaml",
                 "deployment/sim.yaml",
                 "deployment/real.yaml",
                 "robot/g1.yaml",
+                "robot/inspire.yaml",
                 "policy/unitree_wo_gait.yaml",
                 "policy/track.yaml",
             },
@@ -83,6 +85,7 @@ class TestHydraConfig(unittest.TestCase):
                     "net_if",
                     "lowcmd_topic",
                     "lowstate_topic",
+                    "enable_odometry",
                     "motion_switcher_required",
                 }
                 self.assertEqual(set(cfg.env), expected_environment_fields)

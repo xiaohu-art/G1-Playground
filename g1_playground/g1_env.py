@@ -23,6 +23,13 @@ class G1State:
     base_ang_vel: np.ndarray
 
 
+@dataclass(frozen=True)
+class G1Odometry:
+    position: np.ndarray
+    velocity: np.ndarray
+    body_height: float
+
+
 class G1Env:
     """G1 state and command boundary backed by Unitree DDS."""
 
@@ -36,6 +43,7 @@ class G1Env:
         lowstate_topic: str,
         motion_switcher_required: bool,
         dof_cfg: DictConfig,
+        enable_odometry: bool = False,
     ):
 
         joint_names = list(dof_cfg.joint_names)
@@ -58,7 +66,7 @@ class G1Env:
                 "hand_type": "NONE",
                 "lowcmd_topic": lowcmd_topic,
                 "lowstate_topic": lowstate_topic,
-                "enable_odometry": False,
+                "enable_odometry": enable_odometry,
                 "sport_state_topic": "rt/odommodestate",
                 "control_dt": self.control_dt,
                 "num_dofs": self.num_dofs,
@@ -90,6 +98,22 @@ class G1Env:
         if self.remote_controller_handler is not None:
             self.remote_controller_handler(robot_state.wireless_remote)
         return state
+
+    def read_odometry(self) -> G1Odometry | None:
+        try:
+            sport = self.control_endpoint.get_sport_state()
+        except RuntimeError:
+            return None
+        return G1Odometry(
+            position=snapshot(sport.position),
+            velocity=snapshot(sport.velocity),
+            body_height=float(sport.body_height),
+        )
+
+    def set_gains(self, stiffness, damping) -> None:
+        self.control_endpoint.set_gains(
+            np.asarray(stiffness, dtype=float).tolist(), np.asarray(damping, dtype=float).tolist()
+        )
 
     def step(self, pd_target) -> None:
         self.control_endpoint.step(np.asarray(pd_target).tolist())

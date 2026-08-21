@@ -205,7 +205,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
         self.assertIs(type(domain_assignment.value.value), int)
         self.assertEqual(domain_assignment.value.value, 0)
 
-        consumed_keys = re.findall(r'cfg_dict\["([a-z_]+)"\]', control_endpoint_binding)
+        consumed_keys = re.findall(r'cfg_dict\["([a-z_]+)"\]', dict_constructor)
         self.assertEqual(consumed_keys.count("domain_id"), 1)
 
 

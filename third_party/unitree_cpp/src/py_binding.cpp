@@ -130,7 +130,8 @@ void bind_RobotState(py::module_& m) {
     py::class_<SportState>(m, "SportState")
         .def(py::init<>())
         .def_readwrite("position", &SportState::position)
-        .def_readwrite("velocity", &SportState::velocity);
+        .def_readwrite("velocity", &SportState::velocity)
+        .def_readwrite("body_height", &SportState::body_height);
 }
 
 // G1DdsControlEndpoint Class

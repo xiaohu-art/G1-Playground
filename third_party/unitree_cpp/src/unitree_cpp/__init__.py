@@ -68,3 +68,7 @@ class SportState(_SportState):
     @property
     def velocity(self) -> List[float]:
         return super().velocity
+
+    @property
+    def body_height(self) -> float:
+        return super().body_height
