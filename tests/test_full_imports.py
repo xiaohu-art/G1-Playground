@@ -11,12 +11,12 @@ from tests.config_helpers import asset_path, compose_config
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DEPLOYMENTS = {"sim", "real"}
 EXPECTED_POLICIES = {"UnitreeWoGaitPolicy"}
-EXPECTED_CONTROLLERS = {"JoystickCtrl", "UnitreeCtrl"}
+EXPECTED_CONTROLLERS = {"KeyboardCtrl", "UnitreeCtrl"}
 EXPECTED_CHECKPOINT = REPO_ROOT / "assets/models/unitree/policy_wo_gait.pt"
 EXPECTED_COMPONENTS = {
     "sim": (
         "g1_playground.g1_env.G1Env",
-        "g1_playground.controller.joystick_ctrl.JoystickCtrl",
+        "g1_playground.controller.keyboard_ctrl.KeyboardCtrl",
     ),
     "real": (
         "g1_playground.g1_env.G1Env",
@@ -105,7 +105,7 @@ class TestFullImports(unittest.TestCase):
         self.assertEqual(sim.env.domain_id, 1)
         self.assertEqual(sim.env.net_if, "lo")
         self.assertIs(sim.env.motion_switcher_required, False)
-        self.assertEqual(sim.controller._target_, "g1_playground.controller.joystick_ctrl.JoystickCtrl")
+        self.assertEqual(sim.controller._target_, "g1_playground.controller.keyboard_ctrl.KeyboardCtrl")
 
         for deployment in EXPECTED_DEPLOYMENTS:
             cfg = compose_config(deployment)

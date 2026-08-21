@@ -44,6 +44,12 @@ void bind_G1DdsRobotEndpoint(py::module_& m) {
                 std::copy(bytes.begin(), bytes.end(), self.wireless_remote.begin());
             });
 
+    py::class_<DdsSportStateSnapshot>(m, "DdsSportStateSnapshot")
+        .def(py::init<>())
+        .def_readwrite("position", &DdsSportStateSnapshot::position)
+        .def_readwrite("velocity", &DdsSportStateSnapshot::velocity)
+        .def_readwrite("body_height", &DdsSportStateSnapshot::body_height);
+
     py::class_<G1DdsRobotEndpointStats>(m, "G1DdsRobotEndpointStats")
         .def_readonly("accepted_commands", &G1DdsRobotEndpointStats::accepted_commands)
         .def_readonly("crc_errors", &G1DdsRobotEndpointStats::crc_errors)
@@ -57,11 +63,15 @@ void bind_G1DdsRobotEndpoint(py::module_& m) {
             cfg.net_if = cfg_dict["net_if"].cast<std::string>();
             cfg.lowcmd_topic = cfg_dict["lowcmd_topic"].cast<std::string>();
             cfg.lowstate_topic = cfg_dict["lowstate_topic"].cast<std::string>();
+            if (cfg_dict.contains("sport_state_topic")) {
+                cfg.sport_state_topic = cfg_dict["sport_state_topic"].cast<std::string>();
+            }
             cfg.mode_machine = cfg_dict["mode_machine"].cast<std::uint8_t>();
             return new G1DdsRobotEndpoint(cfg);
         }))
         .def("get_command", &G1DdsRobotEndpoint::get_command)
         .def("publish_lowstate", &G1DdsRobotEndpoint::publish_lowstate)
+        .def("publish_sport_state", &G1DdsRobotEndpoint::publish_sport_state, py::arg("snapshot"))
         .def_property_readonly("stats", &G1DdsRobotEndpoint::stats)
         .def("close", &G1DdsRobotEndpoint::close);
 }

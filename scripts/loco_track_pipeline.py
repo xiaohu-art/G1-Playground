@@ -173,10 +173,21 @@ def run(cfg: DictConfig) -> None:
             if frame is None:
                 break
             state, control = frame
+            odometry = env.read_odometry()
             requested, key_descriptor = poll_switch_key(key_descriptor)
+
+            if requested and bool(cfg.env.enable_odometry) and not env.born_place_align:
+                if odometry is None:
+                    logger.error("Cannot enter tracking: odometry is unavailable")
+                    requested = False
+                else:
+                    env.set_born_place(state.base_quat, odometry.position)
+                    state = env.read()
+                    odometry = env.read_odometry()
+
             command = frames.send((state, control, requested))
             env.step(command)
-            record(log, started - origin, state, command, env.read_odometry())
+            record(log, started - origin, state, command, odometry, env)
             if pace(started, loco.dt) < -FRAME_DROP_LIMIT:
                 logger.critical("Exiting due to excessive frame drop")
                 break

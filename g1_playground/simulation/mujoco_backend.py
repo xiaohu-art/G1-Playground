@@ -18,6 +18,8 @@ class MujocoState:
     joint_torque: np.ndarray
     base_quaternion_wxyz: np.ndarray
     base_angular_velocity: np.ndarray
+    base_position_world: np.ndarray
+    base_linear_velocity_world: np.ndarray
 
 
 class ElasticSupport:
@@ -136,6 +138,8 @@ class G1MujocoBackend:
             joint_torque=snapshot(self.data.actuator_force),
             base_quaternion_wxyz=snapshot(self.data.qpos[3:7]),
             base_angular_velocity=snapshot(self.data.qvel[3:6]),
+            base_position_world=snapshot(self.data.qpos[0:3]),
+            base_linear_velocity_world=snapshot(self.data.qvel[0:3]),
         )
 
     def read(self) -> MujocoState:

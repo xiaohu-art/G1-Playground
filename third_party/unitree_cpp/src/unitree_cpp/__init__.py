@@ -2,6 +2,7 @@ from typing import List
 
 from .unitree_cpp import (
     DdsLowStateSnapshot,
+    DdsSportStateSnapshot,
     G1DdsControlEndpoint,
     G1DdsRobotEndpoint,
     InspireCommandSnapshot,

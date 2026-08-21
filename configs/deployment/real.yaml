@@ -6,6 +6,7 @@ env:
   lowcmd_topic: rt/lowcmd
   lowstate_topic: rt/lowstate
   enable_odometry: true
+  sport_state_topic: rt/odommodestate
   motion_switcher_required: true
 
 controller:

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <unitree/idl/hg/LowCmd_.hpp>
+#include <unitree/idl/go2/SportModeState_.hpp>
 #include <unitree/idl/hg/LowState_.hpp>
 #include <unitree/robot/channel/channel_publisher.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
@@ -18,6 +19,7 @@ struct G1DdsRobotEndpointConfig {
     std::string net_if = "lo";
     std::string lowcmd_topic = "rt/lowcmd";
     std::string lowstate_topic = "rt/lowstate";
+    std::string sport_state_topic = "rt/odommodestate";
     std::uint8_t mode_machine = 5;
 };
 
@@ -45,6 +47,12 @@ struct DdsLowStateSnapshot {
     std::array<std::uint8_t, 40> wireless_remote = {};
 };
 
+struct DdsSportStateSnapshot {
+    std::array<double, 3> position = {0.0, 0.0, 0.0};
+    std::array<double, 3> velocity = {0.0, 0.0, 0.0};
+    double body_height = 0.0;
+};
+
 struct G1DdsRobotEndpointStats {
     std::uint64_t accepted_commands = 0;
     std::uint64_t crc_errors = 0;
@@ -59,12 +67,14 @@ class G1DdsRobotEndpoint {
 
     DdsCommandSnapshot get_command() const;
     std::uint32_t publish_lowstate(const DdsLowStateSnapshot& snapshot);
+    std::uint64_t publish_sport_state(const DdsSportStateSnapshot& snapshot);
     G1DdsRobotEndpointStats stats() const;
     bool close();
 
    private:
     using LowCmd = unitree_hg::msg::dds_::LowCmd_;
     using LowState = unitree_hg::msg::dds_::LowState_;
+    using SportModeState = unitree_go::msg::dds_::SportModeState_;
     using Clock = std::chrono::steady_clock;
 
     G1DdsRobotEndpointConfig cfg_;
@@ -73,10 +83,12 @@ class G1DdsRobotEndpoint {
     G1DdsRobotEndpointStats stats_;
     Clock::time_point last_command_time_{};
     std::uint32_t next_tick_ = 1;
+    std::uint64_t sport_state_count_ = 0;
     bool closed_ = false;
 
     unitree::robot::ChannelSubscriberPtr<LowCmd> lowcmd_subscriber_;
     unitree::robot::ChannelPublisherPtr<LowState> lowstate_publisher_;
+    unitree::robot::ChannelPublisherPtr<SportModeState> sport_state_publisher_;
 
     void LowCommandHandler(const void* message);
     void CloseTransportNoexcept() noexcept;

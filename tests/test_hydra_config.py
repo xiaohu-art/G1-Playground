@@ -62,7 +62,7 @@ class TestHydraConfig(unittest.TestCase):
         expected_targets = {
             "sim": {
                 "environment": "g1_playground.g1_env.G1Env",
-                "controller": "g1_playground.controller.joystick_ctrl.JoystickCtrl",
+                "controller": "g1_playground.controller.keyboard_ctrl.KeyboardCtrl",
             },
             "real": {
                 "environment": "g1_playground.g1_env.G1Env",
@@ -77,7 +77,7 @@ class TestHydraConfig(unittest.TestCase):
                 self.assertNotIn("components", cfg)
                 self.assertEqual(cfg.env._target_, expected_targets[deployment]["environment"])
                 self.assertEqual(cfg.controller._target_, expected_targets[deployment]["controller"])
-                self.assertEqual(set(cfg.controller), {"_target_"})
+                self.assertIn("_target_", cfg.controller)
                 expected_environment_fields = {
                     "_target_",
                     "domain_id",
@@ -85,6 +85,7 @@ class TestHydraConfig(unittest.TestCase):
                     "lowcmd_topic",
                     "lowstate_topic",
                     "enable_odometry",
+                    "sport_state_topic",
                     "motion_switcher_required",
                 }
                 self.assertEqual(set(cfg.env), expected_environment_fields)

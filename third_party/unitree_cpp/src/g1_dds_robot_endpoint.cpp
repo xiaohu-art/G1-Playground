@@ -57,6 +57,9 @@ G1DdsRobotEndpoint::G1DdsRobotEndpoint(const G1DdsRobotEndpointConfig& cfg) : cf
             [this](const void* message) { LowCommandHandler(message); }, 1);
         lowstate_publisher_ = std::make_shared<unitree::robot::ChannelPublisher<LowState>>(cfg_.lowstate_topic);
         lowstate_publisher_->InitChannel();
+        sport_state_publisher_ =
+            std::make_shared<unitree::robot::ChannelPublisher<SportModeState>>(cfg_.sport_state_topic);
+        sport_state_publisher_->InitChannel();
     } catch (...) {
         CloseTransportNoexcept();
         throw;
@@ -127,6 +130,33 @@ std::uint32_t G1DdsRobotEndpoint::publish_lowstate(const DdsLowStateSnapshot& sn
     return next_tick_++;
 }
 
+std::uint64_t G1DdsRobotEndpoint::publish_sport_state(const DdsSportStateSnapshot& snapshot) {
+    ValidateArray(snapshot.position, "position");
+    ValidateArray(snapshot.velocity, "velocity");
+    if (!std::isfinite(snapshot.body_height) || std::abs(snapshot.body_height) > FLT_MAX) {
+        throw std::invalid_argument("body_height must be representable as a float");
+    }
+    if (snapshot.body_height <= 0.0) {
+        throw std::invalid_argument("body_height must be positive");
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (closed_ || !sport_state_publisher_) {
+        throw std::logic_error("G1 DDS robot endpoint is closed");
+    }
+
+    SportModeState sport_state{};
+    for (std::size_t index = 0; index < 3; ++index) {
+        sport_state.position().at(index) = static_cast<float>(snapshot.position[index]);
+        sport_state.velocity().at(index) = static_cast<float>(snapshot.velocity[index]);
+    }
+    sport_state.body_height() = static_cast<float>(snapshot.body_height);
+    if (!sport_state_publisher_->Write(sport_state)) {
+        throw std::runtime_error("Failed to publish DDS SportModeState");
+    }
+    return ++sport_state_count_;
+}
+
 G1DdsRobotEndpointStats G1DdsRobotEndpoint::stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return stats_;
@@ -135,6 +165,7 @@ G1DdsRobotEndpointStats G1DdsRobotEndpoint::stats() const {
 bool G1DdsRobotEndpoint::close() {
     unitree::robot::ChannelSubscriberPtr<LowCmd> subscriber;
     unitree::robot::ChannelPublisherPtr<LowState> publisher;
+    unitree::robot::ChannelPublisherPtr<SportModeState> sport_publisher;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (closed_) {
@@ -143,12 +174,16 @@ bool G1DdsRobotEndpoint::close() {
         closed_ = true;
         subscriber = std::move(lowcmd_subscriber_);
         publisher = std::move(lowstate_publisher_);
+        sport_publisher = std::move(sport_state_publisher_);
     }
     if (subscriber) {
         subscriber->CloseChannel();
     }
     if (publisher) {
         publisher->CloseChannel();
+    }
+    if (sport_publisher) {
+        sport_publisher->CloseChannel();
     }
     return true;
 }

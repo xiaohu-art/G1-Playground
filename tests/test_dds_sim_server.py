@@ -86,6 +86,13 @@ class FakeBridge:
         return self.close_calls == 1
 
 
+class SportStateSnapshot:
+    def __init__(self):
+        self.position = [0.0, 0.0, 0.0]
+        self.velocity = [0.0, 0.0, 0.0]
+        self.body_height = 0.0
+
+
 class LowStateSnapshot:
     def __init__(self):
         self.accelerometer = [0.0, 0.0, 0.0]
@@ -292,7 +299,11 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
                 captured["endpoint"] = endpoint
                 captured["bridge"] = self
 
-        native = SimpleNamespace(G1DdsRobotEndpoint=NativeBridge, DdsLowStateSnapshot=LowStateSnapshot)
+        native = SimpleNamespace(
+            G1DdsRobotEndpoint=NativeBridge,
+            DdsLowStateSnapshot=LowStateSnapshot,
+            DdsSportStateSnapshot=SportStateSnapshot,
+        )
 
         backend = FakeBackend()
 
@@ -319,6 +330,7 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
                 "net_if": "lo",
                 "lowcmd_topic": "rt/lowcmd",
                 "lowstate_topic": "rt/lowstate",
+                "sport_state_topic": "rt/odommodestate",
                 "mode_machine": 5,
             },
         )
@@ -329,7 +341,15 @@ class TestMujocoDdsServerLauncher(unittest.TestCase):
         args, kwargs = captured["server"]
         self.assertEqual(args[:3], (backend, captured["bridge"], LowStateSnapshot))
         self.assertEqual(len(args[3]), 29)
-        self.assertEqual(kwargs, {"body_index": None, "hand": None})
+        self.assertEqual(
+            kwargs,
+            {
+                "body_index": None,
+                "hand": None,
+                "sport_state_factory": SportStateSnapshot,
+                "sport_publish_hz": 50.0,
+            },
+        )
 
     def test_run_always_uses_viewer_path(self):
         launcher = load_launcher()

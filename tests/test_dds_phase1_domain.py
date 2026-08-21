@@ -62,7 +62,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
             with initialize_config_dir(version_base=None, config_dir=config_dir.as_posix()):
                 real = compose(config_name="run_pipeline", overrides=["deployment=real"])
             assert sim.env._target_ == "g1_playground.g1_env.G1Env"
-            assert sim.controller._target_ == "g1_playground.controller.joystick_ctrl.JoystickCtrl"
+            assert sim.controller._target_ == "g1_playground.controller.keyboard_ctrl.KeyboardCtrl"
             assert sim.env.domain_id == 1
             assert sim.env.net_if == "lo"
             assert sim.env.motion_switcher_required is False

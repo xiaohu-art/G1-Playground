@@ -22,10 +22,14 @@ def recorder(capacity: int, num_dofs: int = 29):
         base_pos=np.full((capacity, 3), np.nan, dtype=np.float32),
         base_lin_vel=np.full((capacity, 3), np.nan, dtype=np.float32),
         body_height=np.full(capacity, np.nan, dtype=np.float32),
+        sport_position=np.full((capacity, 3), np.nan, dtype=np.float32),
+        rebase_active=np.zeros(capacity, dtype=bool),
+        rebase_origin_pos=np.full((capacity, 3), np.nan, dtype=np.float32),
+        rebase_origin_quat=np.full((capacity, 4), np.nan, dtype=np.float32),
     )
 
 
-def record(log, elapsed, state, command, odometry) -> None:
+def record(log, elapsed, state, command, odometry, alignment=None) -> None:
     if log is None:
         return
     index = log.count
@@ -39,8 +43,13 @@ def record(log, elapsed, state, command, odometry) -> None:
     log.command[index] = command
     if odometry is not None:
         log.base_pos[index] = odometry.position
+        log.sport_position[index] = odometry.raw_position
         log.base_lin_vel[index] = odometry.velocity
         log.body_height[index] = odometry.body_height
+    if alignment is not None and alignment.born_place_align:
+        log.rebase_active[index] = True
+        log.rebase_origin_pos[index] = alignment.base_align.base_pos
+        log.rebase_origin_quat[index] = np.asarray(alignment.base_align.base_quat)[[1, 2, 3, 0]]
     log.count = index + 1
 
 
@@ -54,13 +63,5 @@ def save_recording(log, directory: str, config_text: str = "") -> str | None:
     if config_text:
         with open(os.path.join(path, "config.yaml"), "w", encoding="utf-8") as handle:
             handle.write(config_text)
-    odometry = float(np.isfinite(log.base_pos[: log.count, 0]).mean())
-    height = float(np.isfinite(log.body_height[: log.count]).mean())
-    logger.warning(
-        "Wrote %d frames to %s (odometry valid %.1f%%, body height valid %.1f%%)",
-        log.count,
-        path,
-        100.0 * odometry,
-        100.0 * height,
-    )
+    logger.warning("Wrote %d frames to %s", log.count, path)
     return path

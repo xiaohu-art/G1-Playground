@@ -28,6 +28,7 @@ def build_server(inspire: bool = False) -> G1MujocoDdsServer:
         "net_if": sim.env.net_if,
         "lowcmd_topic": sim.env.lowcmd_topic,
         "lowstate_topic": sim.env.lowstate_topic,
+        "sport_state_topic": sim.env.sport_state_topic,
         "mode_machine": 5,
     }
 
@@ -74,6 +75,8 @@ def build_server(inspire: bool = False) -> G1MujocoDdsServer:
             robot.dof.torque_limits,
             body_index=body_index,
             hand=hand,
+            sport_state_factory=unitree_cpp.DdsSportStateSnapshot,
+            sport_publish_hz=float(sim.sim_odometry.publish_hz),
         )
     except BaseException:
         if robot_endpoint is not None:

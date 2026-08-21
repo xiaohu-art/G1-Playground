@@ -4,6 +4,8 @@ from collections.abc import Callable
 
 import numpy as np
 
+from g1_playground.utils.math import quat_inv, quat_rotate
+
 logger = logging.getLogger("g1_playground")
 
 SUPPORT_HOLD_SECONDS = 3.0
@@ -22,6 +24,8 @@ class G1MujocoDdsServer:
         *,
         body_index=None,
         hand=None,
+        sport_state_factory: Callable | None = None,
+        sport_publish_hz: float = 50.0,
         command_timeout: float = 0.1,
         clock: Callable[[], float] | None = None,
         sleeper: Callable[[float], None] | None = None,
@@ -49,6 +53,11 @@ class G1MujocoDdsServer:
         self._sleep = time.sleep if sleeper is None else sleeper
         self._first_command_time: float | None = None
         self._state = backend.read()
+        self.sport_state_factory = sport_state_factory
+        if not 0.0 < sport_publish_hz < np.inf:
+            raise ValueError("Sport state publish rate must be finite and positive")
+        self.sport_stride = max(round(1.0 / (self.timestep * sport_publish_hz)), 1)
+        self._physics_steps = 0
 
     def support_scale(self, now: float) -> float:
         if self._first_command_time is None:
@@ -79,11 +88,7 @@ class G1MujocoDdsServer:
         feedforward = np.asarray(command.tau, dtype=np.float64)
         stiffness = np.asarray(command.kp, dtype=np.float64)
         damping = np.asarray(command.kd, dtype=np.float64)
-        torque = (
-            feedforward
-            + stiffness * (position_target - joint_pos)
-            + damping * (velocity_target - joint_vel)
-        )
+        torque = feedforward + stiffness * (position_target - joint_pos) + damping * (velocity_target - joint_vel)
         return np.clip(torque, -self.torque_limits, self.torque_limits)
 
     def publish(self, state) -> int:
@@ -94,6 +99,22 @@ class G1MujocoDdsServer:
         snapshot.quaternion = state.base_quaternion_wxyz.tolist()
         snapshot.gyroscope = state.base_angular_velocity.tolist()
         return self.robot_endpoint.publish_lowstate(snapshot)
+
+    def publish_sport_state(self, state) -> None:
+        if self.sport_state_factory is None:
+            return
+        height = float(state.base_position_world[2])
+        if height <= 0.0 or not np.isfinite(height):
+            return
+        body_velocity = quat_rotate(
+            quat_inv(np.asarray(state.base_quaternion_wxyz, dtype=np.float32)),
+            np.asarray(state.base_linear_velocity_world, dtype=np.float32),
+        )
+        snapshot = self.sport_state_factory()
+        snapshot.position = np.asarray(state.base_position_world, dtype=np.float64).tolist()
+        snapshot.velocity = np.asarray(body_velocity, dtype=np.float64).tolist()
+        snapshot.body_height = height
+        self.robot_endpoint.publish_sport_state(snapshot)
 
     def step(self, now: float | None = None) -> int:
         now = self._clock() if now is None else now
@@ -111,6 +132,9 @@ class G1MujocoDdsServer:
         self._state = self.backend.step(torque, self.support_scale(now))
         if self.hand is not None:
             self.hand.publish(self._state.joint_pos, self._state.joint_vel, self.timestep)
+        self._physics_steps += 1
+        if self._physics_steps % self.sport_stride == 0:
+            self.publish_sport_state(self._state)
         return self.publish(self._state)
 
     def run(self, stop_event=None) -> None:
