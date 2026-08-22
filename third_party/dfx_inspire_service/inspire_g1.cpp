@@ -13,15 +13,15 @@
 class InspireRunner
 {
 public:
-  InspireRunner()
+  InspireRunner(const std::string & left_serial_path, const std::string & right_serial_path)
   {
-    serial1 = std::make_shared<SerialPort>("/dev/ttyUSB0", B115200);
-    serial2 = std::make_shared<SerialPort>("/dev/ttyUSB1", B115200);
+    left_serial = std::make_shared<SerialPort>(left_serial_path, B115200);
+    right_serial = std::make_shared<SerialPort>(right_serial_path, B115200);
 
     righthand = std::make_shared<HandWorker>(
-      std::make_shared<inspire::InspireHand>(serial2, 1), "right");
+      std::make_shared<inspire::InspireHand>(right_serial, 1), "right");
     lefthand = std::make_shared<HandWorker>(
-      std::make_shared<inspire::InspireHand>(serial1, 1), "left");
+      std::make_shared<inspire::InspireHand>(left_serial, 1), "left");
 
     handcmd = std::make_shared<unitree::robot::SubscriptionBase<unitree_go::msg::dds_::MotorCmds_>>(
         "rt/" + param::ns + "/cmd");
@@ -107,8 +107,8 @@ public:
 
   unitree::common::ThreadPtr thread;
 
-  SerialPort::SharedPtr serial1;
-  SerialPort::SharedPtr serial2;
+  SerialPort::SharedPtr left_serial;
+  SerialPort::SharedPtr right_serial;
   HandWorker::SharedPtr lefthand;
   HandWorker::SharedPtr righthand;
 
@@ -128,8 +128,10 @@ int main(int argc, char ** argv)
   std::cout << " --- Unitree Robotics --- " << std::endl;
   std::cout << "  Inspire Hand Controller  " << std::endl;
   std::cout << "  (parallel serial workers) " << std::endl;
+  std::cout << "  left serial: " << param::left_serial_port << std::endl;
+  std::cout << "  right serial: " << param::right_serial_port << std::endl;
 
-  InspireRunner runner;
+  InspireRunner runner(param::left_serial_port, param::right_serial_port);
 
   while (true)
   {

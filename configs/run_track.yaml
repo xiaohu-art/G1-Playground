@@ -8,6 +8,9 @@ defaults:
 
 device: cpu
 inspire_service: false
+inspire_serial:
+  left: /dev/serial/by-path/platform-3610000.usb-usb-0:2.2.2:1.0-port0
+  right: /dev/serial/by-path/platform-3610000.usb-usb-0:2.2.4:1.0-port0
 
 env:
   _target_: g1_playground.g1_env.G1Env

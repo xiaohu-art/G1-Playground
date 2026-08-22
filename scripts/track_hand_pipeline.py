@@ -35,7 +35,7 @@ INSPIRE_SERVICE = "third_party/dfx_inspire_service/build/inspire_g1"
 
 
 class InspireService:
-    def __init__(self, net_if: str, domain_id: int):
+    def __init__(self, net_if: str, domain_id: int, left_serial: str, right_serial: str):
         if domain_id != 0:
             raise ValueError(
                 f"the DFX inspire service hardcodes DDS domain 0; this deployment uses domain {domain_id}. "
@@ -48,6 +48,8 @@ class InspireService:
                 "'cd third_party/dfx_inspire_service && mkdir -p build && cd build && cmake .. && make -j4'"
             )
         self.net_if = net_if
+        self.left_serial = left_serial
+        self.right_serial = right_serial
         self.process = None
         self.log = None
 
@@ -57,7 +59,17 @@ class InspireService:
         self.log = open(log_path, "w", encoding="utf-8")
         logger.warning("Starting the DFX inspire service, logging to %s", log_path)
         self.process = subprocess.Popen(
-            [self.binary, "--network", self.net_if], stdout=self.log, stderr=subprocess.STDOUT
+            [
+                self.binary,
+                "--network",
+                self.net_if,
+                "--left-serial",
+                self.left_serial,
+                "--right-serial",
+                self.right_serial,
+            ],
+            stdout=self.log,
+            stderr=subprocess.STDOUT,
         )
         time.sleep(1.0)
         if self.process.poll() is not None:
@@ -154,7 +166,12 @@ def run(cfg: DictConfig) -> None:
 
         inspire = OmegaConf.load(resolve_repo_path("configs/robot/inspire.yaml"))
         if cfg.inspire_service:
-            service = InspireService(cfg.env.net_if, cfg.env.domain_id)
+            service = InspireService(
+                cfg.env.net_if,
+                cfg.env.domain_id,
+                cfg.inspire_serial.left,
+                cfg.inspire_serial.right,
+            )
             service.start()
         hand = InspireHandEnv(
             dof_cfg=inspire.dof,

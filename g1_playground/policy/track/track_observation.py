@@ -26,11 +26,13 @@ class TrackObservation:
         self.total_obs_size = self.num_joints * 5 + 6 + 3 + 13
 
         self._reference_joint_pos = self.default_pos.copy()
+        self._reference_joint_vel = np.zeros(self.num_joints, dtype=np.float32)
         self._reference_anchor_quat = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
         self._reference_anchor_height = np.zeros(1, dtype=np.float32)
+        self._reference_anchor_lin_vel_w = np.zeros(3, dtype=np.float32)
+        self._reference_anchor_ang_vel_w = np.zeros(3, dtype=np.float32)
         self._reference_gravity = GRAVITY_W.copy()
         self.heading = TransformAlignment(yaw_only=True)
-        self._zero_joints = np.zeros(self.num_joints, dtype=np.float32)
         self._zero_vector = np.zeros(3, dtype=np.float32)
 
     def anchor_pose(self, base_pos, base_quat, joint_pos) -> tuple[np.ndarray, np.ndarray]:
@@ -48,11 +50,31 @@ class TrackObservation:
 
     def set_standing_reference(self, base_quat_wxyz: np.ndarray, root_height: float) -> None:
         self.heading.set_base(np.asarray(base_quat_wxyz, dtype=np.float32).reshape(4))
-        anchor_pos, anchor_quat = self.anchor_pose(
-            np.array([0.0, 0.0, root_height], dtype=np.float32), self.heading.base_quat, self.default_pos
+        self.set_reference(
+            root_height=root_height,
+            root_quat=self.heading.base_quat,
+            joint_pos=self.default_pos,
+            joint_vel=np.zeros(self.num_joints, dtype=np.float32),
+            anchor_lin_vel_w=np.zeros(3, dtype=np.float32),
+            anchor_ang_vel_w=np.zeros(3, dtype=np.float32),
         )
+
+    def set_reference(self, root_height, root_quat, joint_pos, joint_vel, anchor_lin_vel_w, anchor_ang_vel_w) -> None:
+        """Set the tracking reference. The anchor velocities are world frame; ``build`` rotates them
+        into the robot anchor frame, the same frame the reference orientation is expressed in."""
+
+        joint_pos = np.asarray(joint_pos, dtype=np.float32).reshape(-1)[: self.num_joints]
+        anchor_pos, anchor_quat = self.anchor_pose(
+            np.array([0.0, 0.0, float(root_height)], dtype=np.float32),
+            np.asarray(root_quat, dtype=np.float32).reshape(4),
+            joint_pos,
+        )
+        self._reference_joint_pos = joint_pos.copy()
+        self._reference_joint_vel = np.asarray(joint_vel, dtype=np.float32).reshape(-1)[: self.num_joints].copy()
         self._reference_anchor_quat = anchor_quat
         self._reference_anchor_height = anchor_pos[2:3].astype(np.float32)
+        self._reference_anchor_lin_vel_w = np.asarray(anchor_lin_vel_w, dtype=np.float32).reshape(3).copy()
+        self._reference_anchor_ang_vel_w = np.asarray(anchor_ang_vel_w, dtype=np.float32).reshape(3).copy()
         self._reference_gravity = quat_rotate(quat_inv(anchor_quat), GRAVITY_W)
 
     def build(self, joint_pos, joint_vel, base_quat_wxyz, base_ang_vel, last_action) -> np.ndarray:
@@ -69,19 +91,20 @@ class TrackObservation:
         _, robot_anchor_quat = self.anchor_pose(self._zero_vector, base_quat, joint_pos)
         robot_frame = TransformAlignment(robot_anchor_quat)
         relative = robot_frame.align_quat(self._reference_anchor_quat)
+        robot_anchor_inverse = quat_inv(robot_anchor_quat)
 
         observation = np.concatenate(
             [
                 self._reference_joint_pos,
-                self._zero_joints,
+                self._reference_joint_vel,
                 quat_to_rot6d(relative),
                 base_ang_vel,
                 joint_pos - self.default_pos,
                 joint_vel,
                 last_action,
                 quat_rotate(quat_inv(base_quat), GRAVITY_W),
-                self._zero_vector,
-                self._zero_vector,
+                quat_rotate(robot_anchor_inverse, self._reference_anchor_lin_vel_w),
+                quat_rotate(robot_anchor_inverse, self._reference_anchor_ang_vel_w),
                 self._reference_gravity,
                 self._reference_anchor_height,
             ],

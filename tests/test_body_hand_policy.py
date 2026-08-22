@@ -67,11 +67,7 @@ class TestBodyHandPolicy(unittest.TestCase):
     def test_targets_are_split_by_joint_name(self):
         names = list(self.config["action"]["body"]["joint_names"]) + list(self.config["action"]["hand"]["joint_names"])
         marker = np.arange(41, dtype=np.float32)
-        cfg = policy_cfg()
-        cfg.action.body.control.lower = [-1e3] * 29
-        cfg.action.body.control.upper = [1e3] * 29
-        wide = build_policy(cfg=cfg)
-        body, hand = wide.split(marker)
+        body, hand = self.policy.split(marker)
         for index, name in enumerate(body_joint_names()):
             self.assertEqual(float(body[index]), float(names.index(name)))
         for index, name in enumerate(hand_joint_names()):
@@ -96,22 +92,16 @@ class TestBodyHandPolicy(unittest.TestCase):
 
     def test_a_naive_slice_would_send_the_wrong_targets(self):
         marker = np.arange(41, dtype=np.float32)
-        cfg = policy_cfg()
-        cfg.action.body.control.lower = [-1e3] * 29
-        cfg.action.body.control.upper = [1e3] * 29
-        wide = build_policy(cfg=cfg)
-        body, hand = wide.split(marker)
+        body, hand = self.policy.split(marker)
         self.assertFalse(np.array_equal(body, marker[:29]))
         self.assertFalse(np.array_equal(hand, marker[29:]))
 
-    def test_body_targets_are_clipped_by_the_policy_configuration(self):
-        cfg = policy_cfg()
-        adapter = DoFAdapter(cfg.action.body.joint_names, body_joint_names())
-        control = cfg.action.body.control
-        body, _ = self.policy.split(np.full(41, 1e3, dtype=np.float32))
-        np.testing.assert_allclose(body, adapter.fit(control.upper), atol=1e-5)
-        body, _ = self.policy.split(np.full(41, -1e3, dtype=np.float32))
-        np.testing.assert_allclose(body, adapter.fit(control.lower), atol=1e-5)
+    def test_body_targets_are_not_clipped(self):
+        marker = np.linspace(-100.0, 100.0, 41, dtype=np.float32)
+        processed = self.policy.process(marker)
+        body, _ = self.policy.split(processed)
+        expected = DoFAdapter(self.config["action"]["body"]["joint_names"], body_joint_names()).fit(processed[:29])
+        np.testing.assert_allclose(body, expected, atol=0.0)
 
     def test_hand_targets_are_left_to_the_inspire_boundary(self):
         _, hand = self.policy.split(np.full(41, 1e3, dtype=np.float32))
@@ -228,7 +218,7 @@ class TestConfigurationOwnership(unittest.TestCase):
         self.assertEqual(set(cfg.observation), {"joint_names", "default_joint_pos", "future_offsets", "anchor_body"})
         self.assertEqual(set(cfg.action), {"body", "hand", "scale", "offset"})
         self.assertEqual(set(cfg.action.body), {"joint_names", "control"})
-        self.assertEqual(set(cfg.action.body.control), {"stiffness", "damping", "lower", "upper"})
+        self.assertEqual(set(cfg.action.body.control), {"stiffness", "damping"})
         self.assertEqual(set(cfg.action.hand), {"joint_names"})
         for banned in ("contract_file", "golden_file", "motion_file", "start_frame", "stop_frame", "loop", "startup"):
             with self.subTest(key=banned):
@@ -254,7 +244,8 @@ class TestConfigurationOwnership(unittest.TestCase):
                 cfg = compose_config(deployment, config_name="run_body_hand")
                 self.assertEqual(cfg.env._target_, "g1_playground.g1_env.G1Env")
                 self.assertIs(cfg.env.enable_odometry, True)
-                self.assertEqual(cfg.motion.file, "assets/motions/largebox/sub16_largebox_022_v00.npz")
+                self.assertTrue(str(cfg.motion.file).endswith(".npz"))
+                self.assertTrue((REPO_ROOT / str(cfg.motion.file)).is_file())
 
     def test_the_composed_runtime_dof_carries_the_policy_gains(self):
         cfg = policy_cfg()
@@ -270,6 +261,7 @@ class TestConfigurationOwnership(unittest.TestCase):
 
         with open(bundle / "deployment_contract.yaml") as handle:
             contract = yaml.safe_load(handle)
+        self.assertIsNone(contract["action_clip_41"])
         names = contract["joint_names_53"]
         cfg = policy_cfg()
         control = cfg.action.body.control
@@ -277,9 +269,6 @@ class TestConfigurationOwnership(unittest.TestCase):
             slot = names.index(name)
             self.assertAlmostEqual(float(control.stiffness[index]), float(contract["joint_stiffness_53"][slot]), 3)
             self.assertAlmostEqual(float(control.damping[index]), float(contract["joint_damping_53"][slot]), 3)
-            limits = contract["joint_pos_limits_53"][slot]
-            self.assertAlmostEqual(float(control.lower[index]), float(limits[0]), 3)
-            self.assertAlmostEqual(float(control.upper[index]), float(limits[1]), 3)
 
     def test_the_staged_motion_matches_the_policy_config(self):
         cfg = policy_cfg()

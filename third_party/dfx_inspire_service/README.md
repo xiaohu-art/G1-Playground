@@ -90,8 +90,10 @@ mkdir build & cd build
 cmake ..
 make -j6
 # Terminal 1. Run g1 inspire hand service
-# The serial port name is hard-coded; if it doesn’t match your setup, please edit it directly in the source.
-sudo ./inspire_g1
+# Prefer stable /dev/serial/by-path links because ttyUSB numbers can change after reconnecting a hand.
+./inspire_g1 --network <interface> \
+  --left-serial <left-hand-serial-path> \
+  --right-serial <right-hand-serial-path>
 # Terminal 2. Run example
 ./hand_example
 ```

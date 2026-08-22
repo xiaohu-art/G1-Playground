@@ -100,6 +100,21 @@ class TrackPolicy(BasePolicy):
             self._last_action,
         )
 
+    @property
+    def last_action(self) -> np.ndarray:
+        return self._last_action.copy()
+
+    def set_reference(self, root_height, root_quat, joint_pos, joint_vel, anchor_lin_vel_w, anchor_ang_vel_w) -> None:
+        self.observation.set_reference(root_height, root_quat, joint_pos, joint_vel, anchor_lin_vel_w, anchor_ang_vel_w)
+        self._reference_ready = True
+
+    def accept_applied_target(self, target) -> None:
+        target = np.asarray(target, dtype=np.float64).reshape(NUM_JOINTS)
+        target = np.clip(target, self.joint_pos_lower, self.joint_pos_upper)
+        action = (target - self.default_pos) / self.action_scale
+        self._last_action = np.clip(action, self.clip_low, self.clip_high).astype(np.float32)
+        self._last_target = target.copy()
+
     def act(self, env_data, control_data) -> np.ndarray:
         raw_action = self.get_action(self.get_observation(env_data, control_data))
         if not np.all(np.isfinite(raw_action)):

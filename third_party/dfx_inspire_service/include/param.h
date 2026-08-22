@@ -13,6 +13,8 @@ namespace param
 namespace po = boost::program_options;
 
 inline std::string serial_port;
+inline std::string left_serial_port;
+inline std::string right_serial_port;
 inline std::string network; 
 inline std::string ns; 
 inline float threhold;
@@ -26,10 +28,12 @@ po::variables_map helper(int argc, char** argv)
 #endif
 
 
-  po::options_description desc("Unitree H1 Inspire Hand Serial to DDS");
+  po::options_description desc("Unitree Inspire Hand Serial to DDS");
   desc.add_options()
     ("help,h", "produce help message")
     ("serial,s", po::value<std::string>(&serial_port)->default_value("/dev/ttyUSB0"), "serial port")
+    ("left-serial", po::value<std::string>(&left_serial_port)->default_value("/dev/ttyUSB0"), "left hand serial port")
+    ("right-serial", po::value<std::string>(&right_serial_port)->default_value("/dev/ttyUSB1"), "right hand serial port")
     ("network", po::value<std::string>(&network)->default_value(""), "DDS network interface")
     ("namespace", po::value<std::string>(&ns)->default_value("inspire"), "DDS topic namespace")
     ;

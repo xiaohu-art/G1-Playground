@@ -51,6 +51,33 @@ def yaw_quat(quaternion: np.ndarray) -> np.ndarray:
     return result / max(float(np.linalg.norm(result)), 1e-8)
 
 
+def quat_slerp(first: np.ndarray, second: np.ndarray, weight: float) -> np.ndarray:
+    first = np.asarray(first, dtype=np.float32).reshape(4)
+    second = np.asarray(second, dtype=np.float32).reshape(4)
+    dot = float(np.dot(first, second))
+    if dot < 0.0:
+        second, dot = -second, -dot
+    if dot > 0.9995:
+        blended = first + weight * (second - first)
+        return (blended / max(float(np.linalg.norm(blended)), 1e-8)).astype(np.float32)
+    theta = float(np.arccos(np.clip(dot, -1.0, 1.0)))
+    sin_theta = float(np.sin(theta))
+    blended = np.sin((1.0 - weight) * theta) * first + np.sin(weight * theta) * second
+    return (blended / sin_theta).astype(np.float32)
+
+
+def quat_angular_velocity(previous: np.ndarray, current: np.ndarray, dt: float) -> np.ndarray:
+    delta = quat_mul(np.asarray(current, dtype=np.float32), quat_inv(np.asarray(previous, dtype=np.float32)))
+    if delta[0] < 0.0:
+        delta = -delta
+    axis = delta[1:4]
+    norm = float(np.linalg.norm(axis))
+    if norm < 1e-8 or dt <= 0.0:
+        return np.zeros(3, dtype=np.float32)
+    angle = 2.0 * float(np.arccos(np.clip(float(delta[0]), -1.0, 1.0)))
+    return (axis / norm * (angle / dt)).astype(np.float32)
+
+
 def quat_to_rot6d(quaternion: np.ndarray) -> np.ndarray:
     w, x, y, z = quaternion[0], quaternion[1], quaternion[2], quaternion[3]
     return np.array(

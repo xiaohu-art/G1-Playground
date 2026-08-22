@@ -24,6 +24,7 @@ class TestHydraConfig(unittest.TestCase):
                 "run_track.yaml",
                 "run_loco_track.yaml",
                 "run_body_hand.yaml",
+                "run_loco_largebox_track.yaml",
                 "deployment/sim.yaml",
                 "deployment/real.yaml",
                 "robot/g1.yaml",
@@ -32,6 +33,8 @@ class TestHydraConfig(unittest.TestCase):
                 "policy/track.yaml",
                 "policy/body_hand_distill_largebox.yaml",
                 "motion/largebox_022_v00.yaml",
+                "motion/largebox_037_v02.yaml",
+                "motion/largebox_039_v00.yaml",
             },
         )
         self.assertFalse((REPO_ROOT / "g1_playground/config").exists())
@@ -60,6 +63,13 @@ class TestHydraConfig(unittest.TestCase):
         self.assertEqual(len(policy.dof.joint_names), 29)
         for removed_field in ("obs_dof", "action_dof", "freq", "history_length", "history_obs_dims"):
             self.assertNotIn(removed_field, policy)
+
+    def test_track_uses_stable_distinct_inspire_serial_paths(self):
+        root = OmegaConf.load(CONFIG_DIR / "run_track.yaml")
+        self.assertEqual(set(root.inspire_serial), {"left", "right"})
+        self.assertNotEqual(root.inspire_serial.left, root.inspire_serial.right)
+        self.assertTrue(root.inspire_serial.left.startswith("/dev/serial/by-path/"))
+        self.assertTrue(root.inspire_serial.right.startswith("/dev/serial/by-path/"))
 
     def test_native_composition_selects_the_runtime_backend(self):
         expected_targets = {

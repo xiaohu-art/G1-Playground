@@ -55,9 +55,6 @@ class BodyHandPolicy:
         ):
             raise ValueError("Body-hand policy configuration does not match the ONNX tensor dimensions")
 
-        body_control = cfg_policy.action.body.control
-        self.body_lower = self.body_to_runtime.fit(body_control.lower).astype(np.float32)
-        self.body_upper = self.body_to_runtime.fit(body_control.upper).astype(np.float32)
         self.motion = self._load_motion(cfg_motion, observation_joint_names, cfg_policy.observation.future_offsets)
         self.observation = BodyHandObservation(self.motion, default_joint_pos, self.observation_dim)
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
@@ -101,8 +98,7 @@ class BodyHandPolicy:
         processed = np.asarray(processed, dtype=np.float32).reshape(self.action_dim)
         body_action = processed[: self.body_action_dim]
         hand_action = processed[self.body_action_dim :]
-        body = np.clip(self.body_to_runtime.fit(body_action), self.body_lower, self.body_upper)
-        return body, self.hand_to_runtime.fit(hand_action).copy()
+        return self.body_to_runtime.fit(body_action).copy(), self.hand_to_runtime.fit(hand_action).copy()
 
     def joint_state(self, body_state, hand_state) -> tuple[np.ndarray, np.ndarray]:
         return (
