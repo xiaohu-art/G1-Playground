@@ -23,12 +23,15 @@ class TestHydraConfig(unittest.TestCase):
                 "run_pipeline.yaml",
                 "run_track.yaml",
                 "run_loco_track.yaml",
+                "run_body_hand.yaml",
                 "deployment/sim.yaml",
                 "deployment/real.yaml",
                 "robot/g1.yaml",
                 "robot/inspire.yaml",
                 "policy/unitree_wo_gait.yaml",
                 "policy/track.yaml",
+                "policy/body_hand_distill_largebox.yaml",
+                "motion/largebox_022_v00.yaml",
             },
         )
         self.assertFalse((REPO_ROOT / "g1_playground/config").exists())

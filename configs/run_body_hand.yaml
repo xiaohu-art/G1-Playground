@@ -1,0 +1,28 @@
+defaults:
+  - robot: g1
+  - policy: body_hand_distill_largebox
+  - motion: largebox_022_v00
+  - deployment: sim
+  - override hydra/job_logging: disabled
+  - override hydra/hydra_logging: disabled
+  - _self_
+
+device: cpu
+
+startup:
+  ramp_seconds: 3.0
+  blend_seconds: 5.0
+
+recording:
+  enabled: true
+  directory: logs
+
+env:
+  _target_: g1_playground.g1_env.G1Env
+
+hydra:
+  job:
+    chdir: false
+  output_subdir: null
+  run:
+    dir: .

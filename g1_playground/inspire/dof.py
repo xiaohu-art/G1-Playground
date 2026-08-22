@@ -1,8 +1,6 @@
 import numpy as np
 from omegaconf import DictConfig
 
-from g1_playground.utils.dof import DoFAdapter
-
 NUM_SLOTS = 12
 STROKE_UNITS = 1000
 
@@ -22,10 +20,6 @@ def limits(dof_cfg: DictConfig) -> tuple[np.ndarray, np.ndarray]:
     if np.any(lower >= upper):
         raise ValueError("Inspire lower limits must be strictly below the upper limits")
     return lower, upper
-
-
-def adapter(src_joint_names, tar_joint_names) -> DoFAdapter:
-    return DoFAdapter(src_joint_names, tar_joint_names, num_dofs=NUM_SLOTS)
 
 
 def rad_to_q(rad, lower, upper) -> np.ndarray:

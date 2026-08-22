@@ -10,10 +10,15 @@ CONFIG_DIR = REPO_ROOT / "configs"
 PIPELINE_LAUNCHER = REPO_ROOT / "scripts/pipeline.py"
 
 
-def compose_config(deployment: str = "sim", *overrides: str, return_hydra_config: bool = False) -> DictConfig:
+def compose_config(
+    deployment: str = "sim",
+    *overrides: str,
+    config_name: str = "run_pipeline",
+    return_hydra_config: bool = False,
+) -> DictConfig:
     with initialize_config_dir(version_base=None, config_dir=CONFIG_DIR.as_posix()):
         return compose(
-            config_name="run_pipeline",
+            config_name=config_name,
             overrides=[f"deployment={deployment}", *overrides],
             return_hydra_config=return_hydra_config,
         )
