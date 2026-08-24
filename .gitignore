@@ -132,3 +132,6 @@ MUJOCO_LOG.TXT
 
 # Claude Code session state and agent worktrees
 .claude/
+
+# Sibling Isaac Lab training workspace (checkpoint source, own git repo)
+hoi/

@@ -52,8 +52,10 @@ def build_hold(motion_file: str, clip_name: str, frame: int | None, frames: int,
     return (
         {
             "joint_pos": np.repeat(joint_pos[None], frames, axis=0),
+            "joint_vel": np.zeros((frames, len(joint_names)), dtype=np.float32),
             "anchor_pos_w": np.repeat(anchor_pos[None], frames, axis=0),
             "anchor_quat_w": np.repeat(anchor_quat[None], frames, axis=0),
+            "anchor_lin_vel_w": np.zeros((frames, 3), dtype=np.float32),
             "joint_names": np.asarray(joint_names, dtype="<U32"),
             "fps": np.asarray([fps], dtype=np.int64),
             "clip_name": np.asarray(f"{clip_name}_terminal_hold"),

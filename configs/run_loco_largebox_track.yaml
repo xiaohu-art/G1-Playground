@@ -4,7 +4,7 @@ defaults:
   - policy@loco: unitree_wo_gait
   - policy@largebox: body_hand_distill_largebox
   - policy@stand_track: track
-  - motion: largebox_037_v02
+  - motion: largebox_039_v00
   - deployment: sim
   - override hydra/job_logging: disabled
   - override hydra/hydra_logging: disabled
@@ -17,7 +17,14 @@ startup:
   blend_seconds: 5.0
 
 handover:
-  to_largebox_seconds: 2.0
+  settle_seconds: 3.0
+  min_body_height: 0.72
+  max_body_tilt: 0.25
+  max_linear_speed: 0.10
+  max_angular_speed: 0.30
+  to_largebox_seconds: 4.0
+  return_settle_seconds: 3.0
+  return_max_joint_speed: 0.50
   to_standing_seconds: 5.0
   body_rate_limit: 0.05
 

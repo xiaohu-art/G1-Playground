@@ -20,6 +20,7 @@ def snapshot(values) -> np.ndarray:
 class InspireHandState:
     joint_pos: np.ndarray
     joint_vel: np.ndarray
+    lost: np.ndarray
     age: float
 
     @property
@@ -82,11 +83,14 @@ class InspireHandEnv:
             return InspireHandState(
                 joint_pos=snapshot(self.lower),
                 joint_vel=snapshot(np.zeros(dof_utils.NUM_SLOTS)),
+                lost=np.zeros(dof_utils.NUM_SLOTS, dtype=np.uint32),
                 age=float("inf"),
             )
+        lost = np.asarray(state.lost, dtype=np.uint32).copy()
         return InspireHandState(
             joint_pos=snapshot(dof_utils.q_to_rad(np.asarray(state.q), self.lower, self.upper)),
             joint_vel=snapshot(dof_utils.dq_to_rad_per_s(np.asarray(state.dq), self.lower, self.upper)),
+            lost=lost,
             age=float(state.age_seconds),
         )
 

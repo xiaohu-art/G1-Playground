@@ -1,0 +1,6 @@
+# @package motion
+
+# Quasi-static hardware preflight for h20_clip_006 at its validated terminal frame.
+file: assets/motions/largebox/teacher_ref21_env20_ep1_terminal_hold.npz
+terminal_frame: -1
+terminal_hold_seconds: 0.0

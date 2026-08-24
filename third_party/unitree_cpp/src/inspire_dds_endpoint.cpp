@@ -69,6 +69,7 @@ void InspireDdsControlEndpoint::StateHandler(const void* message) {
         }
         snapshot.q[index] = q;
         snapshot.dq[index] = dq;
+        snapshot.lost[index] = states.states()[index].lost();
     }
 
     std::lock_guard<std::mutex> lock(mutex_);

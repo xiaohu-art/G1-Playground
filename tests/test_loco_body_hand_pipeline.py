@@ -28,9 +28,10 @@ class FakeState:
 
 
 class FakeHandState:
-    def __init__(self, age=0.001):
+    def __init__(self, age=0.001, lost=None):
         self.joint_pos = np.zeros(12)
         self.joint_vel = np.zeros(12)
+        self.lost = np.zeros(12, dtype=np.uint32) if lost is None else np.asarray(lost, dtype=np.uint32)
         self.age = age
 
     @property
@@ -99,6 +100,9 @@ class FakeMotion:
         self.events = events
         self.align_calls = 0
         self.anchor_pos = np.zeros((self.num_frames, 3), dtype=np.float32)
+        self.anchor_pos[:, 2] = 0.77
+        self.anchor_quat = np.zeros((self.num_frames, 4), dtype=np.float32)
+        self.anchor_quat[:, 0] = 1.0
 
     def align(self):
         self.align_calls += 1
@@ -107,7 +111,7 @@ class FakeMotion:
 
 class FakeLargebox:
     action_dim = 41
-    observation_dim = 463
+    observation_dim = 728
     freq = 50
     dt = 0.02
 
@@ -120,15 +124,18 @@ class FakeLargebox:
         self.acts = 0
         self.targets = []
 
-    def get_observation(self, frame, anchor_pos, anchor_quat, state, hand_state):
+    def get_observation(self, frame, anchor_quat, state, hand_state):
         self.frames.append(int(frame))
-        return np.zeros(463, dtype=np.float32)
+        return np.zeros(728, dtype=np.float32)
 
     def act(self, observation):
         self.acts += 1
-        body = np.full(29, 3.0) if self.acts > self.motion.num_frames else np.full(29, 0.4)
+        body = np.full(29, 3.0) if self.acts == self.motion.num_frames else np.full(29, 0.4)
         self.targets.append(body.copy())
         return body, np.full(12, 0.3)
+
+    def reference_targets(self):
+        return np.full(29, 0.4), np.full(12, 0.3)
 
     def reset(self):
         self.events.append(("largebox_reset", 0.0))
@@ -230,6 +237,11 @@ def make_run(module, log=None, shutdown_after=None):
         origin=0.0,
         key_descriptor=-1,
         body_rate_limit=0.05,
+        handover_min_height=0.72,
+        handover_max_tilt=0.25,
+        handover_max_linear_speed=0.10,
+        handover_max_angular_speed=0.30,
+        return_max_joint_speed=0.50,
         largebox_stiffness=np.full(29, 40.0),
         largebox_damping=np.full(29, 1.0),
     )
@@ -248,21 +260,46 @@ class TestHandoverSequence(unittest.TestCase):
         state, hand_state, odometry = FakeState(), FakeHandState(), FakeOdometry()
         body, hand = np.zeros(29), np.zeros(12)
         state, odometry = module.capture_largebox_origin(run, state, hand_state, odometry)
-        body, hand = module.blend_to_largebox(run, 100, hand)
+        body, hand = module.blend_to_largebox(run, 100, body, hand)
         run.commands_after_crossfade = len(run.env.commands)
+        run.references_after_transition = len(run.stand_track.references)
+        run.applied_after_transition = len(run.stand_track.applied)
         body, hand = module.run_largebox_motion(run)
         run.largebox_frames_at_handover = len(run.largebox.frames)
         run.commands_at_largebox_end = len(run.env.commands)
         run.largebox_last_command = run.env.commands[-1].copy()
-        state, hand_state, odometry, _ = module.read_frame(run)
+        body, hand, state, hand_state, odometry = module.settle_largebox_for_return(run, 100, body, hand)
+        run.return_last_command = np.asarray(body, dtype=np.float64).copy()
         run.measured_body = np.asarray(state.dof_pos, dtype=np.float64).copy()
-        start, body = module.capture_standing_reference(run, state, odometry)
+        start = module.capture_standing_reference(run, state, odometry, body)
         run.commands_at_standing = len(run.env.commands)
+        run.references_at_standing = len(run.stand_track.references)
+        run.applied_at_standing = len(run.stand_track.applied)
         body, hand = module.track_to_standing(run, 250, body, hand, start)
         run.controller.shutdown_after = run.controller.reads + hold_frames
         with self.assertRaises(module.Stop):
             module.hold_stand_track(run, body, hand)
         return run, body, hand
+
+    def test_settling_keeps_locomotion_closed_loop_instead_of_commanding_its_nominal_pose(self):
+        run = make_run(self.module)
+        initial = np.full(29, -0.6)
+        body, hand, state, _, odometry = self.module.settle_locomotion_for_handover(run, 100, initial, np.zeros(12))
+        np.testing.assert_allclose(run.env.commands, np.full((9, 29), -0.6))
+        np.testing.assert_allclose(body, initial)
+        np.testing.assert_allclose(hand, 0.0)
+        self.assertEqual(state.dof_pos.shape, (29,))
+        self.assertAlmostEqual(odometry.body_height, 0.78)
+
+    def test_an_unstable_base_is_never_handed_to_the_tracker(self):
+        run = make_run(self.module)
+        unstable = FakeOdometry()
+        unstable.body_height = 0.61
+        unstable.position[2] = 0.61
+        run.env.read_odometry = lambda: unstable
+        with self.assertRaisesRegex(self.module.Stop, "did not reach a stable"):
+            self.module.settle_locomotion_for_handover(run, 20, np.zeros(29), np.zeros(12))
+        self.assertEqual(len(run.env.commands), 20)
 
     def test_the_origin_is_captured_exactly_once(self):
         run, _, _ = self.drive()
@@ -276,47 +313,53 @@ class TestHandoverSequence(unittest.TestCase):
 
     def test_the_reference_runs_every_frame_once_in_order(self):
         run, _, _ = self.drive()
-        played = run.largebox.frames
-        self.assertEqual(set(played[:100]), {0})
-        self.assertEqual(played[100:], list(range(414)))
+        played = run.largebox.frames[: run.largebox_frames_at_handover]
+        self.assertEqual(played, list(range(414)))
 
-    def test_the_last_frame_is_never_replayed_after_the_reference_ends(self):
+    def test_only_the_static_terminal_frame_is_replayed_while_confirming_stability(self):
         run, _, _ = self.drive()
-        self.assertEqual(len(run.largebox.frames), run.largebox_frames_at_handover)
-        self.assertEqual(run.largebox.frames[-1], 413)
-        self.assertEqual(run.largebox.frames.count(413), 1)
+        self.assertEqual(run.largebox.frames[: run.largebox_frames_at_handover], list(range(414)))
+        self.assertEqual(set(run.largebox.frames[run.largebox_frames_at_handover :]), {413})
 
-    def test_the_standing_tracker_is_reset_once_when_the_reference_ends(self):
+    def test_the_standing_tracker_is_reset_for_each_tracker_phase(self):
         run, _, _ = self.drive()
         order = [name for name, _ in run.events if name.endswith("_reset")]
-        self.assertEqual(order, ["largebox_reset", "stand_reset"])
-        self.assertEqual(run.stand_track.reset_calls, 1)
+        self.assertEqual(order, ["largebox_reset", "stand_reset", "largebox_reset", "stand_reset"])
+        self.assertEqual(run.stand_track.reset_calls, 2)
 
     def test_the_gains_switch_once_and_never_switch_back(self):
         run, _, _ = self.drive()
         gains = [value for name, value in run.events if name == "gains"]
         self.assertEqual(gains, [40.0])
 
-    def test_the_crossfade_is_the_eased_policy_blend(self):
+    def test_the_transition_uses_the_tracker_without_freezing_the_hoi_policy(self):
         run, _, _ = self.drive()
-        crossfade = np.asarray(run.env.commands[: run.commands_after_crossfade])
+        transition = np.asarray(run.env.commands[: run.commands_after_crossfade])
+        self.assertGreaterEqual(run.largebox.acts, run.largebox.motion.num_frames)
+        self.assertEqual(
+            run.largebox.frames[: run.largebox.motion.num_frames], list(range(run.largebox.motion.num_frames))
+        )
+        self.assertEqual(run.references_after_transition, 102)
+        self.assertLessEqual(float(np.abs(np.diff(transition, axis=0)).max()), run.body_rate_limit + 1e-9)
+
+        references = run.stand_track.references[: run.references_after_transition]
         progress = np.arange(1, 101, dtype=np.float64) / 100.0
         alpha = progress**2 * (3.0 - 2.0 * progress)
-        expected = np.repeat((-0.6 + alpha)[:, None], 29, axis=1)
-        np.testing.assert_allclose(crossfade, expected)
-        np.testing.assert_allclose(crossfade[-1], run.largebox.targets[99])
+        expected = np.repeat((0.4 * alpha)[:, None], 29, axis=1)
+        np.testing.assert_allclose([item.joint_pos for item in references[1:-1]], expected, atol=1e-8)
+        np.testing.assert_allclose(references[-1].joint_pos, np.full(29, 0.4))
 
     def test_the_largebox_phase_executes_policy_targets_directly(self):
         run, _, _ = self.drive()
         commands = np.asarray(run.env.commands)
         largebox = commands[run.commands_after_crossfade : run.commands_at_largebox_end]
-        targets = np.asarray(run.largebox.targets[100 : 100 + run.largebox.motion.num_frames])
+        targets = np.asarray(run.largebox.targets[: run.largebox.motion.num_frames])
         np.testing.assert_allclose(largebox, targets)
 
     def test_a_sudden_network_target_is_not_rate_limited_during_motion(self):
         run, _, _ = self.drive()
         commands = np.asarray(run.env.commands[run.commands_after_crossfade : run.commands_at_largebox_end])
-        targets = np.asarray(run.largebox.targets[100 : 100 + run.largebox.motion.num_frames])
+        targets = np.asarray(run.largebox.targets)
         jumps = np.flatnonzero(np.abs(np.diff(targets, axis=0)).max(axis=1) > 1.0)
         self.assertGreater(len(jumps), 0, "the fake policy never produced a sudden target")
         spike = int(jumps[0]) + 1
@@ -325,17 +368,17 @@ class TestHandoverSequence(unittest.TestCase):
         self.assertGreater(float(np.abs(target_step).max()), 2.0)
         np.testing.assert_allclose(command_step, target_step)
 
-    def test_the_first_standing_command_starts_from_the_measured_pose(self):
+    def test_the_first_standing_command_starts_from_the_last_applied_target(self):
         run, _, _ = self.drive()
         first = run.env.commands[run.commands_at_standing]
-        self.assertLessEqual(float(np.abs(first - run.measured_body).max()), run.body_rate_limit + 1e-9)
+        self.assertLessEqual(float(np.abs(first - run.return_last_command).max()), run.body_rate_limit + 1e-9)
 
-    def test_the_out_of_range_largebox_target_never_leaks_into_the_tracker(self):
+    def test_a_large_terminal_tracking_error_is_removed_gradually(self):
         run, _, _ = self.drive()
         first = run.env.commands[run.commands_at_standing]
         self.assertGreater(float(np.abs(run.largebox_last_command - run.measured_body).max()), 1.0)
-        self.assertFalse(np.array_equal(first, run.largebox_last_command))
-        self.assertGreater(float(np.abs(first - run.largebox_last_command).max()), 1.0)
+        self.assertFalse(np.array_equal(first, run.return_last_command))
+        self.assertLessEqual(float(np.abs(first - run.return_last_command).max()), run.body_rate_limit + 1e-9)
 
     def test_the_standing_phases_are_rate_limited_within_themselves(self):
         run, _, _ = self.drive(hold_frames=40)
@@ -349,16 +392,17 @@ class TestHandoverSequence(unittest.TestCase):
         np.testing.assert_allclose(hand, np.full(12, 0.3))
         np.testing.assert_allclose(run.hand_env.targets[-1], np.full(12, 0.3))
 
-    def test_the_tracker_is_reset_once_after_the_reference_ends(self):
+    def test_the_tracker_is_reset_again_after_the_reference_ends(self):
         run, _, _ = self.drive()
         names = [name for name, _ in run.events]
-        self.assertEqual(names.count("stand_reset"), 1)
-        self.assertLess(names.index("largebox_reset"), names.index("stand_reset"))
-        self.assertLess(names.index("stand_reset"), names.index("stand_act"))
+        self.assertEqual(names.count("stand_reset"), 2)
+        second_reset = [index for index, name in enumerate(names) if name == "stand_reset"][1]
+        self.assertGreater(second_reset, max(index for index, name in enumerate(names) if name == "largebox_reset"))
+        self.assertIn("stand_act", names[second_reset + 1 :])
 
     def test_the_first_reference_is_the_live_pose_not_the_last_command(self):
         run, _, _ = self.drive()
-        first = run.stand_track.references[0]
+        first = run.stand_track.references[run.references_after_transition]
         np.testing.assert_allclose(first.joint_pos, FakeState().dof_pos)
         np.testing.assert_allclose(first.joint_vel, 0.0)
         np.testing.assert_allclose(first.lin_vel_w, 0.0)
@@ -367,7 +411,7 @@ class TestHandoverSequence(unittest.TestCase):
 
     def test_the_reference_walks_to_the_default_pose_and_stops_there(self):
         run, _, _ = self.drive()
-        references = run.stand_track.references
+        references = run.stand_track.references[run.references_after_transition :]
         np.testing.assert_allclose(references[-1].joint_pos, run.stand_track.standing_target)
         np.testing.assert_allclose(references[-1].joint_vel, 0.0)
         self.assertAlmostEqual(references[-1].root_height, run.stand_track.reference_root_height)
@@ -376,7 +420,8 @@ class TestHandoverSequence(unittest.TestCase):
 
     def test_the_reference_velocity_follows_the_eased_derivative(self):
         run, _, _ = self.drive()
-        speed = [float(np.abs(item.joint_vel).max()) for item in run.stand_track.references[1:-1]]
+        references = run.stand_track.references[run.references_at_standing :]
+        speed = [float(np.abs(item.joint_vel).max()) for item in references[:-1]]
         peak = max(speed)
         self.assertGreater(peak, 0.0)
         self.assertLess(speed[0] / peak, 0.05)
@@ -391,7 +436,8 @@ class TestHandoverSequence(unittest.TestCase):
         body, hand = np.zeros(29), np.zeros(12)
         body, hand = module.run_largebox_motion(run)
         largebox_rows = log.count
-        start, body = module.capture_standing_reference(run, state, odometry)
+        body = np.full(29, 3.0)
+        start = module.capture_standing_reference(run, state, odometry, body)
         module.track_to_standing(run, 30, body, hand, start)
 
         phases = [module.PHASES[index] for index in log.phase[: log.count]]
@@ -406,9 +452,9 @@ class TestHandoverSequence(unittest.TestCase):
     def test_the_applied_target_is_fed_back_on_every_frame(self):
         run, _, _ = self.drive(hold_frames=20)
         blended = run.env.commands[run.commands_at_standing :]
-        seeded, applied = run.stand_track.applied[0], run.stand_track.applied[1:]
-        np.testing.assert_allclose(seeded, run.measured_body)
-        self.assertFalse(np.array_equal(seeded, run.largebox_last_command))
+        seeded = run.stand_track.applied[run.applied_after_transition]
+        applied = run.stand_track.applied[run.applied_at_standing :]
+        np.testing.assert_allclose(seeded, run.return_last_command)
         self.assertEqual(len(applied), len(blended))
         for value, command in zip(applied, blended, strict=True):
             np.testing.assert_allclose(value, command)
@@ -422,13 +468,35 @@ class TestHandoverSequence(unittest.TestCase):
         module = self.module
         run = make_run(module)
         state, _, odometry, _ = module.read_frame(run)
-        start, body = module.capture_standing_reference(run, state, odometry)
+        body = np.zeros(29)
+        start = module.capture_standing_reference(run, state, odometry, body)
         run.env.read_odometry = lambda: None
         body, hand = module.track_to_standing(run, 5, body, np.full(12, 0.3), start)
         run.controller.shutdown_after = run.controller.reads + 5
         with self.assertRaises(module.Stop):
             module.hold_stand_track(run, body, hand)
         self.assertGreaterEqual(run.stand_track.calls, 10)
+
+    def test_an_unstable_hoi_terminal_state_is_never_handed_to_the_tracker(self):
+        run = make_run(self.module)
+        moving = FakeOdometry()
+        moving.velocity[0] = 0.48
+        run.env.read_odometry = lambda: moving
+        with self.assertRaisesRegex(self.module.Stop, "did not settle safely"):
+            self.module.settle_largebox_for_return(run, 20, np.zeros(29), np.zeros(12))
+        self.assertEqual(run.stand_track.reset_calls, 0)
+        self.assertEqual(len(run.env.commands), 20)
+
+    def test_the_terminal_settle_policy_is_rate_limited(self):
+        run = make_run(self.module)
+        moving = FakeOdometry()
+        moving.velocity[0] = 0.48
+        run.env.read_odometry = lambda: moving
+        initial = np.full(29, -0.6)
+        with self.assertRaises(self.module.Stop):
+            self.module.settle_largebox_for_return(run, 20, initial, np.zeros(12))
+        commands = np.vstack([initial, np.asarray(run.env.commands)])
+        self.assertLessEqual(float(np.abs(np.diff(commands, axis=0)).max()), run.body_rate_limit + 1e-9)
 
 
 class TestSafetyBoundary(unittest.TestCase):
@@ -465,6 +533,10 @@ class TestSafetyBoundary(unittest.TestCase):
         with self.assertRaises(self.module.Stop):
             self.module.require_largebox_inputs(stale, FakeOdometry())
 
+    def test_serial_loss_counters_are_diagnostic_only(self):
+        hand_state = FakeHandState(lost=np.full(12, 100, dtype=np.uint32))
+        self.module.require_largebox_inputs(hand_state, FakeOdometry())
+
 
 class TestConfiguration(unittest.TestCase):
     def test_the_run_root_composes_with_both_deployments(self):
@@ -483,7 +555,18 @@ class TestConfiguration(unittest.TestCase):
         self.assertEqual(set(root), {"defaults", "device", "startup", "handover", "recording", "env", "hydra"})
         self.assertEqual(
             set(root.handover),
-            {"to_largebox_seconds", "to_standing_seconds", "body_rate_limit"},
+            {
+                "settle_seconds",
+                "min_body_height",
+                "max_body_tilt",
+                "max_linear_speed",
+                "max_angular_speed",
+                "to_largebox_seconds",
+                "return_settle_seconds",
+                "return_max_joint_speed",
+                "to_standing_seconds",
+                "body_rate_limit",
+            },
         )
 
     def test_the_existing_single_policy_launchers_are_untouched(self):

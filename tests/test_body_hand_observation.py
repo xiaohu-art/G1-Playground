@@ -10,12 +10,24 @@ from tests.body_hand_helpers import (
     REPO_ROOT,
     hand_joint_names,
     motion_data,
+    parity_trace,
     policy_data,
     session,
-    training_golden,
 )
 
 GRAVITY_W = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+
+# Observation layout: [deployable_ref_motion_body | robot_proprio] with 53 joints and 5 future offsets.
+FUTURE_JOINT_POS = slice(0, 265)
+FUTURE_JOINT_VEL = slice(265, 530)
+ANCHOR_LIN_VEL_B = slice(530, 545)
+ANCHOR_ORI_B = slice(545, 575)
+BASE_ANG_VEL = slice(575, 578)
+JOINT_POS_REL = slice(578, 631)
+JOINT_VEL = slice(631, 684)
+PROJECTED_GRAVITY = slice(684, 687)
+LAST_ACTION = slice(687, 728)
+OBSERVATION_DIM = 728
 
 
 def build_motion():
@@ -23,8 +35,10 @@ def build_motion():
     config = policy_data()
     return ReferenceMotion(
         data["joint_pos"],
+        data["joint_vel"],
         data["anchor_pos_w"],
         data["anchor_quat_w"],
+        data["anchor_lin_vel_w"],
         config["observation"]["future_offsets"],
     )
 
@@ -69,13 +83,21 @@ class TestReferenceMotion(unittest.TestCase):
         before = self.motion.raw_anchor_pos.copy()
         self.motion.align()
         after = self.motion.anchor_pos
-        for index in (1, 40, 200, 400):
+        for index in (1, 40, 200, 290):
             self.assertAlmostEqual(
                 float(np.linalg.norm(before[index] - before[0])),
                 float(np.linalg.norm(after[index] - after[0])),
                 places=4,
             )
         np.testing.assert_allclose(before[:, 2], after[:, 2], atol=1e-5)
+
+    def test_alignment_rotates_the_anchor_velocity_without_changing_its_norm(self):
+        raw_vel = self.motion.raw_anchor_lin_vel.copy()
+        self.motion.align()
+        aligned_vel = self.motion.anchor_lin_vel
+        np.testing.assert_allclose(np.linalg.norm(aligned_vel, axis=1), np.linalg.norm(raw_vel, axis=1), atol=1e-5)
+        origin_quat = self.motion.origin.base_quat
+        np.testing.assert_allclose(quat_rotate(origin_quat, aligned_vel), raw_vel, atol=1e-5)
 
 
 class TestJointAssembler(unittest.TestCase):
@@ -142,42 +164,74 @@ class TestObservationLayout(unittest.TestCase):
             int(session().get_inputs()[0].shape[-1]),
         )
 
-    def test_the_builder_emits_the_model_input_dimension(self):
-        built = self.observation.build(
-            0,
-            np.zeros(3),
-            np.array([1.0, 0.0, 0.0, 0.0]),
-            np.zeros(3),
-            np.zeros(53),
-            np.zeros(53),
-            np.zeros(41),
+    def build(self, frame=0, quat=None, ang_vel=None, pos=None, vel=None, action=None):
+        return self.observation.build(
+            frame,
+            np.array([1.0, 0.0, 0.0, 0.0]) if quat is None else quat,
+            np.zeros(3) if ang_vel is None else ang_vel,
+            np.zeros(53) if pos is None else pos,
+            np.zeros(53) if vel is None else vel,
+            np.zeros(41) if action is None else action,
         )
-        self.assertEqual(built.shape, (463,))
+
+    def test_the_builder_emits_the_model_input_dimension(self):
+        self.assertEqual(self.build().shape, (OBSERVATION_DIM,))
+        self.assertEqual(int(session().get_inputs()[0].shape[-1]), OBSERVATION_DIM)
 
     def test_the_declared_dimension_must_match_the_layout(self):
-        observation = BodyHandObservation(self.motion, self.config["observation"]["default_joint_pos"], 462)
+        observation = BodyHandObservation(self.motion, self.config["observation"]["default_joint_pos"], 727)
         with self.assertRaises(ValueError):
-            observation.build(
-                0,
-                np.zeros(3),
-                np.array([1.0, 0.0, 0.0, 0.0]),
-                np.zeros(3),
-                np.zeros(53),
-                np.zeros(53),
-                np.zeros(41),
-            )
+            observation.build(0, np.array([1.0, 0, 0, 0]), np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(41))
+
+    def test_the_segments_follow_the_training_layout(self):
+        built = self.build(
+            frame=0,
+            quat=np.array([1.0, 0.0, 0.0, 0.0]),
+            ang_vel=np.full(3, 0.11, dtype=np.float32),
+            pos=np.full(53, 0.22, dtype=np.float32),
+            vel=np.full(53, 0.33, dtype=np.float32),
+            action=np.full(41, 0.44, dtype=np.float32),
+        )
+        default = np.asarray(self.config["observation"]["default_joint_pos"], dtype=np.float32)
+        future = self.motion.future_indices(0)
+        np.testing.assert_allclose(built[FUTURE_JOINT_POS], self.motion.joint_pos[future].reshape(-1), atol=1e-6)
+        np.testing.assert_allclose(built[FUTURE_JOINT_VEL], self.motion.joint_vel[future].reshape(-1), atol=1e-6)
+        np.testing.assert_allclose(built[ANCHOR_LIN_VEL_B], self.motion.anchor_lin_vel[future].reshape(-1), atol=1e-6)
+        np.testing.assert_allclose(built[BASE_ANG_VEL], 0.11, atol=1e-6)
+        np.testing.assert_allclose(built[JOINT_POS_REL], 0.22 - default, atol=1e-6)
+        np.testing.assert_allclose(built[JOINT_VEL], 0.33, atol=1e-6)
+        np.testing.assert_allclose(built[PROJECTED_GRAVITY], GRAVITY_W, atol=1e-6)
+        np.testing.assert_allclose(built[LAST_ACTION], 0.44, atol=1e-6)
+
+    def test_the_anchor_velocity_is_expressed_in_the_robot_anchor_frame(self):
+        data = motion_data()
+        frame = 10
+        robot_quat = np.asarray(data["anchor_quat_w"][frame], dtype=np.float32)
+        built = self.observation.build(
+            frame, robot_quat, np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(41)
+        )
+        future = self.motion.future_indices(frame)
+        expected = quat_rotate(quat_inv(robot_quat), np.asarray(data["anchor_lin_vel_w"][future], dtype=np.float32))
+        np.testing.assert_allclose(built[ANCHOR_LIN_VEL_B], expected.reshape(-1), atol=1e-5)
+
+    def test_the_anchor_orientation_matches_the_first_two_rotation_columns(self):
+        data = motion_data()
+        frame = 7
+        robot_quat = np.asarray(data["anchor_quat_w"][frame], dtype=np.float32)
+        built = self.observation.build(
+            frame, robot_quat, np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(41)
+        )
+        future = self.motion.future_indices(frame)
+        future_quat = np.asarray(data["anchor_quat_w"][future], dtype=np.float32)
+        from g1_playground.utils.math import quat_mul
+
+        relative = quat_mul(quat_inv(robot_quat), future_quat)
+        expected = np.concatenate([rotation_matrix(q)[:, :2].reshape(-1) for q in relative])
+        np.testing.assert_allclose(built[ANCHOR_ORI_B], expected, atol=1e-5)
 
     def test_the_previous_action_block_is_last_and_action_sized(self):
         action = np.arange(41, dtype=np.float32)
-        built = self.observation.build(
-            0,
-            np.zeros(3),
-            np.array([1.0, 0.0, 0.0, 0.0]),
-            np.zeros(3),
-            np.zeros(53),
-            np.zeros(53),
-            action,
-        )
+        built = self.build(action=action)
         np.testing.assert_array_equal(built[-41:], action)
 
     def test_rot6d_is_the_first_two_columns_of_the_rotation_matrix(self):
@@ -203,14 +257,13 @@ class TestObservationLayout(unittest.TestCase):
     def test_a_wrong_sized_previous_action_is_rejected(self):
         with self.assertRaises(ValueError):
             self.observation.build(
-                0, np.zeros(3), np.array([1.0, 0, 0, 0]), np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(29)
+                0, np.array([1.0, 0, 0, 0]), np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(29)
             )
 
     def test_non_finite_inputs_are_refused_rather_than_scrubbed(self):
         with self.assertRaises(ValueError) as caught:
             self.observation.build(
                 0,
-                np.array([0.0, 0.0, np.nan]),
                 np.array([1.0, 0.0, 0.0, 0.0]),
                 np.zeros(3),
                 np.zeros(53),
@@ -221,65 +274,113 @@ class TestObservationLayout(unittest.TestCase):
 
     def test_a_non_finite_reference_frame_is_refused_when_used(self):
         data = motion_data()
-        broken = np.array(data["anchor_pos_w"], dtype=np.float32)
+        broken = np.array(data["anchor_lin_vel_w"], dtype=np.float32)
         broken[10, 0] = np.nan
-        motion = ReferenceMotion(data["joint_pos"], broken, data["anchor_quat_w"], [0])
-        observation = BodyHandObservation(motion, self.config["observation"]["default_joint_pos"], 215)
+        motion = ReferenceMotion(
+            data["joint_pos"],
+            data["joint_vel"],
+            data["anchor_pos_w"],
+            data["anchor_quat_w"],
+            broken,
+            [0],
+        )
+        observation = BodyHandObservation(motion, self.config["observation"]["default_joint_pos"], OBSERVATION_DIM)
         with self.assertRaises(ValueError):
             observation.build(
-                10,
-                np.zeros(3),
-                np.array([1.0, 0.0, 0.0, 0.0]),
-                np.zeros(3),
-                np.zeros(53),
-                np.zeros(53),
-                np.zeros(41),
+                10, np.array([1.0, 0.0, 0.0, 0.0]), np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(41)
             )
 
     def test_relative_geometry_survives_the_alignment(self):
-        arguments = (np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(41))
-        robot_pos = np.array([1.0, -2.0, 0.78], dtype=np.float32)
         robot_quat = np.array([0.9239, 0.0, 0.0, 0.3827], dtype=np.float32)
-        before = self.observation.build(20, robot_pos, robot_quat, *arguments)
+        arguments = (np.zeros(3), np.zeros(53), np.zeros(53), np.zeros(41))
+        before = self.observation.build(20, robot_quat, *arguments)
 
         self.motion.align()
         origin = self.motion.origin
-        after = self.observation.build(20, origin.align_pos(robot_pos), origin.align_quat(robot_quat), *arguments)
+        after = self.observation.build(20, origin.align_quat(robot_quat), *arguments)
         np.testing.assert_allclose(before, after, atol=2e-5)
 
 
-@unittest.skipUnless(training_golden() is not None, "training bundle with golden_frame.npz is not available")
-class TestGoldenParity(unittest.TestCase):
+@unittest.skipUnless(parity_trace() is not None, "Isaac parity trace is not available")
+class TestParityTrace(unittest.TestCase):
+    """Rebuild the network input from the recorded robot state and compare against the Isaac observation.
+
+    The trace is produced by ``scripts/rsl_rl/play.py --parity_trace parity_trace.npz`` on the training
+    machine; only the rows that play the deployed clip are checked. The reference-motion segments must
+    match exactly, while the corrupted proprio terms are bounded by the training noise ranges.
+    """
+
     def setUp(self):
         self.config = policy_data()
-        self.golden = training_golden()
+        self.trace = parity_trace()
+        deployed = motion_data()
+        clip_index = int(np.asarray(deployed["clip_index"]).reshape(-1)[0]) if "clip_index" in deployed.files else 0
+        keep = np.flatnonzero(np.asarray(self.trace["clip_ids"]) == clip_index)
+        self.assertGreater(len(keep), 1, "the parity trace holds no rows for the deployed clip")
+        self.rows = keep
+        self.motion = build_motion()
         self.observation = BodyHandObservation(
-            build_motion(),
+            self.motion,
             self.config["observation"]["default_joint_pos"],
             int(session().get_inputs()[0].shape[-1]),
         )
 
-    def test_the_reference_blocks_rebuild_from_the_staged_motion(self):
-        default = np.asarray(self.config["observation"]["default_joint_pos"], dtype=np.float32)
-        built = self.observation.build(
-            int(self.golden["motion_time_step"]),
-            self.golden["robot_anchor_pos_w"],
-            self.golden["robot_anchor_quat_w"],
-            self.golden["slice/robot_proprio.base_ang_vel"],
-            self.golden["slice/robot_proprio.joint_pos"] + default,
-            self.golden["slice/robot_proprio.joint_vel"],
-            self.golden["slice/robot_proprio.actions"],
+    def rebuild(self, row, last_action):
+        return self.observation.build(
+            int(self.trace["frame_indices"][row]),
+            np.asarray(self.trace["base_quat_wxyz"][row], dtype=np.float32),
+            np.asarray(self.trace["base_ang_vel"][row], dtype=np.float32),
+            np.asarray(self.trace["joint_pos"][row], dtype=np.float32),
+            np.asarray(self.trace["joint_vel"][row], dtype=np.float32),
+            last_action,
         )
-        expected = np.asarray(self.golden["observation_463"], dtype=np.float32)
-        np.testing.assert_allclose(built[:419], expected[:419], atol=1e-6)
-        np.testing.assert_allclose(built[422:], expected[422:], atol=1e-6)
-        self.assertLessEqual(float(np.abs(built[419:422] - expected[419:422]).max()), 0.05)
 
-    def test_the_golden_gravity_differs_only_by_training_noise(self):
-        clean = quat_rotate(quat_inv(np.asarray(self.golden["robot_anchor_quat_w"], dtype=np.float32)), GRAVITY_W)
-        self.assertAlmostEqual(float(np.linalg.norm(clean)), 1.0, places=5)
-        difference = np.asarray(self.golden["slice/robot_proprio.projected_gravity"]) - clean
-        self.assertTrue(bool(np.all(np.abs(difference) <= 0.05)))
+    def test_the_trace_uses_the_deployment_joint_orders(self):
+        np.testing.assert_array_equal(
+            [str(n) for n in self.trace["joint_names"]], list(self.config["observation"]["joint_names"])
+        )
+        action_names = list(self.config["action"]["body"]["joint_names"]) + list(
+            self.config["action"]["hand"]["joint_names"]
+        )
+        np.testing.assert_array_equal([str(n) for n in self.trace["action_joint_names"]], action_names)
+
+    def test_the_reference_segments_rebuild_exactly(self):
+        for row in self.rows:
+            recorded = np.asarray(self.trace["observations"][row], dtype=np.float32)
+            # The last-action content is checked separately; seed it from the recording here.
+            built = self.rebuild(row, recorded[LAST_ACTION])
+            np.testing.assert_allclose(built[: ANCHOR_ORI_B.stop], recorded[: ANCHOR_ORI_B.stop], atol=1e-5)
+
+    def test_the_corrupted_proprio_segments_stay_within_the_training_noise(self):
+        for row in self.rows:
+            recorded = np.asarray(self.trace["observations"][row], dtype=np.float32)
+            built = self.rebuild(row, recorded[LAST_ACTION])
+            self.assertLessEqual(float(np.abs(built[BASE_ANG_VEL] - recorded[BASE_ANG_VEL]).max()), 0.2 + 1e-5)
+            self.assertLessEqual(float(np.abs(built[JOINT_POS_REL] - recorded[JOINT_POS_REL]).max()), 0.01 + 1e-5)
+            self.assertLessEqual(float(np.abs(built[JOINT_VEL] - recorded[JOINT_VEL]).max()), 0.5 + 1e-5)
+            self.assertLessEqual(
+                float(np.abs(built[PROJECTED_GRAVITY] - recorded[PROJECTED_GRAVITY]).max()), 0.05 + 1e-5
+            )
+
+    def test_the_last_action_chains_across_consecutive_frames(self):
+        actions = np.asarray(self.trace["raw_actions"], dtype=np.float32)
+        frames = np.asarray(self.trace["frame_indices"])
+        for previous, row in zip(self.rows[:-1], self.rows[1:], strict=True):
+            if frames[row] != frames[previous] + 1:
+                continue
+            recorded = np.asarray(self.trace["observations"][row], dtype=np.float32)
+            np.testing.assert_allclose(recorded[LAST_ACTION], actions[previous], atol=1e-6)
+            built = self.rebuild(row, actions[previous])
+            np.testing.assert_allclose(built[LAST_ACTION], recorded[LAST_ACTION], atol=1e-6)
+
+    def test_the_deployed_onnx_reproduces_the_recorded_actions(self):
+        graph = session()
+        observations = np.asarray(self.trace["observations"][self.rows], dtype=np.float32)
+        expected = np.asarray(self.trace["raw_actions"][self.rows], dtype=np.float32)
+        predicted = graph.run(
+            [graph.get_outputs()[0].name], {graph.get_inputs()[0].name: observations}
+        )[0]
+        np.testing.assert_allclose(predicted.reshape(expected.shape), expected, atol=1e-4)
 
 
 class TestDeploymentAssets(unittest.TestCase):

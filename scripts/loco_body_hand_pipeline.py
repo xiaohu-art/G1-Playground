@@ -33,6 +33,7 @@ from g1_playground.utils.recorder import record, recorder, save_recording
 logger = logging.getLogger("g1_playground")
 SWITCH_KEY = b"]"
 WARMUP_STEPS = 3
+HANDOVER_STABLE_FRAMES = 10
 ZERO_CONTROL = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0}}
 IDLE_CONTROL = {"axes": {}}
 PHASES = (
@@ -41,11 +42,13 @@ PHASES = (
     "locomotion",
     "to_largebox",
     "largebox",
+    "largebox_settle",
     "to_standing",
     "stand_track",
 )
-LARGEBOX_PHASES = ("to_largebox", "largebox")
+LARGEBOX_PHASES = ("largebox", "largebox_settle")
 STANDING_PHASES = ("to_standing", "stand_track")
+TRACK_PHASES = ("to_largebox", *STANDING_PHASES)
 
 
 class Stop(RuntimeError):
@@ -101,8 +104,8 @@ def require_largebox_inputs(hand_state, odometry) -> None:
         raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
 
 
-def largebox_command(run, frame, state, hand_state, odometry):
-    observation = run.largebox.get_observation(frame, odometry.position, anchor_quat(state), state, hand_state)
+def largebox_command(run, frame, state, hand_state):
+    observation = run.largebox.get_observation(frame, anchor_quat(state), state, hand_state)
     return run.largebox.act(observation)
 
 
@@ -130,7 +133,7 @@ def record_frame(run, phase, frame, state, hand_state, odometry, body_target, ha
     log.hand_target[index] = hand_target
     if phase in LARGEBOX_PHASES:
         log.largebox_action[index] = run.largebox.last_action
-    elif phase in STANDING_PHASES:
+    elif phase in TRACK_PHASES:
         log.stand_action[index] = run.stand_track.last_action
     record(log, run.started - run.origin, state, body_target, odometry, run.env)
 
@@ -214,6 +217,35 @@ def run_locomotion_until_switch(run, body_command, hand_command):
         commit(run, "locomotion", None, state, hand_state, odometry, body_command, hand_command)
 
 
+def settle_locomotion_for_handover(run, steps, body_command, hand_command):
+    """Keep locomotion closed-loop at zero command until the base is stably parked."""
+    logger.warning("Waiting up to %.1f seconds for a stable zero-command handover", steps * run.dt)
+    stable_frames = 0
+    for _ in range(steps):
+        run.started = time.monotonic()
+        state, hand_state, odometry, _ = read_frame(run)
+        require_largebox_inputs(hand_state, odometry)
+        stable = (
+            is_upright(state.base_quat, max_tilt=run.handover_max_tilt)
+            and float(odometry.body_height) >= run.handover_min_height
+            and float(np.linalg.norm(odometry.velocity)) <= run.handover_max_linear_speed
+            and float(np.linalg.norm(state.base_ang_vel)) <= run.handover_max_angular_speed
+        )
+        stable_frames = stable_frames + 1 if stable else 0
+        if stable_frames >= HANDOVER_STABLE_FRAMES:
+            logger.warning(
+                "Locomotion handover is stable: height %.3f m, linear speed %.3f m/s, angular speed %.3f rad/s",
+                float(odometry.body_height),
+                float(np.linalg.norm(odometry.velocity)),
+                float(np.linalg.norm(state.base_ang_vel)),
+            )
+            return body_command, hand_command, state, hand_state, odometry
+
+        body_command = run.loco.act(state, ZERO_CONTROL)
+        commit(run, "locomotion", None, state, hand_state, odometry, body_command, hand_command)
+    raise Stop("Locomotion did not reach a stable handover state; keep the robot parked before switching")
+
+
 def capture_largebox_origin(run, state, hand_state, odometry):
     require_largebox_inputs(hand_state, odometry)
     logger.warning(
@@ -237,33 +269,140 @@ def capture_largebox_origin(run, state, hand_state, odometry):
     return state, odometry
 
 
-def blend_to_largebox(run, steps, hand_command):
+def blend_to_largebox(run, steps, body_command, hand_command):
+    """Use the standing tracker to move to frame 0 without running a frozen HOI policy."""
+    if steps <= 0:
+        raise ValueError("The locomotion-to-HOI reference transition must contain at least one step")
     run.env.set_gains(run.largebox_stiffness, run.largebox_damping)
-    logger.warning("Switched to the largebox gains; crossfading over %.1f seconds", steps * run.dt)
-    initial_hand = np.asarray(hand_command, dtype=np.float64)
+    logger.warning(
+        "Switched to the tracking gains; walking the reference to HOI frame 0 over %.1f seconds",
+        steps * run.dt,
+    )
+
+    state, hand_state, odometry, _ = read_frame(run)
+    require_largebox_inputs(hand_state, odometry)
+    start = SimpleNamespace(
+        joint_pos=np.asarray(state.dof_pos, dtype=np.float32).copy(),
+        root_quat=anchor_quat(state),
+        root_height=float(odometry.position[2]),
+        hand_pos=np.asarray(hand_command, dtype=np.float64).copy(),
+    )
+    target_body, target_hand = run.largebox.reference_targets()
+    target_body = np.asarray(target_body, dtype=np.float32)
+    target_hand = np.asarray(target_hand, dtype=np.float64)
+    target_quat = np.asarray(run.largebox.motion.anchor_quat[0], dtype=np.float32)
+    target_height = float(run.largebox.motion.anchor_pos[0, 2])
+
+    run.stand_track.reset()
+    run.stand_track.accept_applied_target(body_command)
+    previous = apply_reference(
+        run,
+        start.root_height,
+        start.root_quat,
+        start.joint_pos,
+        np.zeros(29, dtype=np.float32),
+        None,
+    )
+    duration = steps * run.dt
     for index in range(steps):
         run.started = time.monotonic()
         state, hand_state, odometry, _ = read_frame(run)
         require_largebox_inputs(hand_state, odometry)
-        largebox_body, largebox_hand = largebox_command(run, 0, state, hand_state, odometry)
-        loco_body = run.loco.act(state, ZERO_CONTROL)
-        alpha = eased((index + 1) / steps)
-        body_command = (1.0 - alpha) * loco_body + alpha * largebox_body
-        hand_command = (1.0 - alpha) * initial_hand + alpha * largebox_hand
-        commit(run, "to_largebox", 0, state, hand_state, odometry, body_command, hand_command)
+
+        progress = (index + 1) / steps
+        alpha = eased(progress)
+        alpha_rate = 6.0 * progress * (1.0 - progress) / duration
+        previous = apply_reference(
+            run,
+            (1.0 - alpha) * start.root_height + alpha * target_height,
+            quat_slerp(start.root_quat, target_quat, alpha),
+            (1.0 - alpha) * start.joint_pos + alpha * target_body,
+            alpha_rate * (target_body - start.joint_pos),
+            previous,
+        )
+
+        policy_target = run.stand_track.act(state, IDLE_CONTROL)
+        body_command = rate_limited(body_command, policy_target, run.body_rate_limit)
+        run.stand_track.accept_applied_target(body_command)
+        hand_command = (1.0 - alpha) * start.hand_pos + alpha * target_hand
+        commit(run, "to_largebox", None, state, hand_state, odometry, body_command, hand_command)
+
+    apply_reference(
+        run,
+        target_height,
+        target_quat,
+        target_body,
+        np.zeros(29, dtype=np.float32),
+        None,
+    )
+    run.largebox.reset()
     return body_command, hand_command
 
 
 def run_largebox_motion(run):
     frames = run.largebox.motion.num_frames
-    logger.warning("Running all %d reference frames once (%.2f s)", frames, frames * run.dt)
+    source_frames = getattr(run.largebox.motion, "source_num_frames", frames)
+    terminal_frames = getattr(run.largebox.motion, "terminal_hold_frames", 0)
+    logger.warning(
+        "Running %d source frames plus %d terminal hold frames once (%.2f s)",
+        source_frames,
+        terminal_frames,
+        frames * run.dt,
+    )
     for frame in range(frames):
         run.started = time.monotonic()
         state, hand_state, odometry, _ = read_frame(run)
         require_largebox_inputs(hand_state, odometry)
-        body_command, hand_command = largebox_command(run, frame, state, hand_state, odometry)
+        body_command, hand_command = largebox_command(run, frame, state, hand_state)
         commit(run, "largebox", frame, state, hand_state, odometry, body_command, hand_command)
     return body_command, hand_command
+
+
+def settle_largebox_for_return(run, steps, body_command, hand_command):
+    """Keep the static terminal reference closed-loop until a return handoff is genuinely stable."""
+    if steps <= 0:
+        raise ValueError("The HOI return settle window must contain at least one step")
+    frame = run.largebox.motion.num_frames - 1
+    stable_frames = 0
+    last_metrics = None
+    logger.warning("Waiting up to %.1f seconds for a stable HOI-to-standing handover", steps * run.dt)
+    for _ in range(steps):
+        run.started = time.monotonic()
+        state, hand_state, odometry, _ = read_frame(run)
+        require_largebox_inputs(hand_state, odometry)
+        last_metrics = (
+            float(odometry.body_height),
+            float(np.linalg.norm(odometry.velocity)),
+            float(np.linalg.norm(state.base_ang_vel)),
+            float(np.max(np.abs(state.dof_vel))),
+        )
+        stable = (
+            is_upright(state.base_quat, max_tilt=run.handover_max_tilt)
+            and last_metrics[0] >= run.handover_min_height
+            and last_metrics[1] <= run.handover_max_linear_speed
+            and last_metrics[2] <= run.handover_max_angular_speed
+            and last_metrics[3] <= run.return_max_joint_speed
+        )
+        stable_frames = stable_frames + 1 if stable else 0
+        if stable_frames >= HANDOVER_STABLE_FRAMES:
+            logger.warning(
+                "HOI return handover is stable: height %.3f m, linear %.3f m/s, angular %.3f rad/s, "
+                "max joint speed %.3f rad/s",
+                *last_metrics,
+            )
+            return body_command, hand_command, state, hand_state, odometry
+
+        desired_body, desired_hand = largebox_command(run, frame, state, hand_state)
+        body_command = rate_limited(body_command, desired_body, run.body_rate_limit)
+        hand_command = desired_hand
+        commit(run, "largebox_settle", frame, state, hand_state, odometry, body_command, hand_command)
+
+    height, linear, angular, joint = last_metrics
+    raise Stop(
+        "HOI terminal reference did not settle safely "
+        f"(height {height:.3f} m, linear {linear:.3f} m/s, angular {angular:.3f} rad/s, "
+        f"max joint speed {joint:.3f} rad/s)"
+    )
 
 
 def reference_anchor_pose(run, root_height, root_quat, joint_pos):
@@ -293,10 +432,11 @@ def apply_reference(run, root_height, root_quat, joint_pos, joint_vel, previous)
     return anchor_pos, anchor_quat
 
 
-def capture_standing_reference(run, state, odometry):
+def capture_standing_reference(run, state, odometry, applied_body_command):
     measured_body = np.asarray(state.dof_pos, dtype=np.float64).copy()
+    applied_body_command = np.asarray(applied_body_command, dtype=np.float64).copy()
     run.stand_track.reset()
-    run.stand_track.accept_applied_target(measured_body)
+    run.stand_track.accept_applied_target(applied_body_command)
     start = SimpleNamespace(
         joint_pos=measured_body.astype(np.float32),
         root_quat=anchor_quat(state),
@@ -310,7 +450,7 @@ def capture_standing_reference(run, state, odometry):
         start.root_height,
         float(np.abs(start.joint_pos - run.stand_track.standing_target).max()),
     )
-    return start, measured_body
+    return start
 
 
 def track_to_standing(run, steps, body_command, hand_command, start):
@@ -418,6 +558,11 @@ def run(cfg: DictConfig) -> None:
             origin=0.0,
             key_descriptor=-1,
             body_rate_limit=float(cfg.handover.body_rate_limit),
+            handover_min_height=float(cfg.handover.min_body_height),
+            handover_max_tilt=float(cfg.handover.max_body_tilt),
+            handover_max_linear_speed=float(cfg.handover.max_linear_speed),
+            handover_max_angular_speed=float(cfg.handover.max_angular_speed),
+            return_max_joint_speed=float(cfg.handover.return_max_joint_speed),
             largebox_stiffness=largebox.body_to_runtime.fit(body_control.stiffness),
             largebox_damping=largebox.body_to_runtime.fit(body_control.damping),
         )
@@ -434,23 +579,29 @@ def run(cfg: DictConfig) -> None:
 
         ramp_steps = int(cfg.startup.ramp_seconds * loco.freq)
         blend_steps = int(cfg.startup.blend_seconds * loco.freq)
+        settle_steps = int(cfg.handover.settle_seconds * loco.freq)
         to_largebox_steps = int(cfg.handover.to_largebox_seconds * loco.freq)
+        return_settle_steps = int(cfg.handover.return_settle_seconds * loco.freq)
         to_standing_steps = int(cfg.handover.to_standing_seconds * loco.freq)
 
         body_command, hand_command = startup_locomotion(run, ramp_steps, blend_steps)
         body_command, hand_command, state, hand_state, odometry = run_locomotion_until_switch(
             run, body_command, hand_command
         )
+        body_command, hand_command, state, hand_state, odometry = settle_locomotion_for_handover(
+            run, settle_steps, body_command, hand_command
+        )
         state, odometry = capture_largebox_origin(run, state, hand_state, odometry)
-        body_command, hand_command = blend_to_largebox(run, to_largebox_steps, hand_command)
+        body_command, hand_command = blend_to_largebox(run, to_largebox_steps, body_command, hand_command)
         body_command, hand_command = run_largebox_motion(run)
-        state, hand_state, odometry, _ = read_frame(run)
-        require_largebox_inputs(hand_state, odometry)
+        body_command, hand_command, state, hand_state, odometry = settle_largebox_for_return(
+            run, return_settle_steps, body_command, hand_command
+        )
         logger.warning(
-            "Dropping the largebox target: it sits %.2f rad from the measured pose",
+            "HOI terminal tracking error is %.2f rad; preserving the applied target for a continuous handover",
             float(np.abs(np.asarray(body_command, dtype=np.float64) - np.asarray(state.dof_pos)).max()),
         )
-        start, body_command = capture_standing_reference(run, state, odometry)
+        start = capture_standing_reference(run, state, odometry, body_command)
         body_command, hand_command = track_to_standing(run, to_standing_steps, body_command, hand_command, start)
         hold_stand_track(run, body_command, hand_command)
     except Stop as stopped:

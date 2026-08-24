@@ -79,12 +79,48 @@ class BodyHandPolicy:
         fps = int(np.asarray(motion["fps"]).reshape(-1)[0])
         if fps != self.freq:
             raise ValueError(f"Reference motion is {fps} Hz but the policy runs at {self.freq} Hz")
-        return ReferenceMotion(
-            motion["joint_pos"],
-            motion["anchor_pos_w"],
-            motion["anchor_quat_w"],
-            future_offsets,
+        terminal_hold_seconds = float(cfg_motion.get("terminal_hold_seconds", 0.0))
+        if terminal_hold_seconds < 0.0:
+            raise ValueError("terminal_hold_seconds must be non-negative")
+        terminal_hold_frames = int(round(terminal_hold_seconds * fps))
+        source_frames = int(motion["joint_pos"].shape[0])
+        terminal_frame = cfg_motion.get("terminal_frame", None)
+        terminal_frame = source_frames - 1 if terminal_frame is None else int(terminal_frame)
+        if terminal_frame < 0:
+            terminal_frame += source_frames
+        if not 0 <= terminal_frame < source_frames:
+            if bool(np.allclose(motion["joint_vel"], 0.0)) and bool(
+                np.allclose(motion["anchor_lin_vel_w"], 0.0)
+            ):
+                logger.info("Motion is already static; ignoring terminal_frame=%d", terminal_frame)
+                terminal_frame = source_frames - 1
+            else:
+                raise ValueError(
+                    f"terminal_frame {terminal_frame} is outside this non-static {source_frames}-frame motion"
+                )
+        logger.info(
+            "Ending the deployable source motion at frame %d of %d before the terminal hold",
+            terminal_frame,
+            source_frames - 1,
         )
+        rows = slice(0, terminal_frame + 1)
+        result = ReferenceMotion(
+            motion["joint_pos"][rows],
+            motion["joint_vel"][rows],
+            motion["anchor_pos_w"][rows],
+            motion["anchor_quat_w"][rows],
+            motion["anchor_lin_vel_w"][rows],
+            future_offsets,
+            terminal_hold_frames=terminal_hold_frames,
+        )
+        if terminal_hold_frames:
+            logger.info(
+                "Appended %d zero-velocity terminal frames (%.2f s) to the %d-frame motion",
+                terminal_hold_frames,
+                terminal_hold_frames / fps,
+                result.source_num_frames,
+            )
+        return result
 
     def infer(self, observation: np.ndarray) -> np.ndarray:
         outputs = self.session.run([self._output_name], {self._obs_name: observation.reshape(1, -1)})
@@ -117,10 +153,10 @@ class BodyHandPolicy:
     def last_action(self) -> np.ndarray:
         return self._last_action.copy()
 
-    def get_observation(self, frame, anchor_pos, anchor_quat, body_state, hand_state) -> np.ndarray:
+    def get_observation(self, frame, anchor_quat, body_state, hand_state) -> np.ndarray:
         joint_pos, joint_vel = self.joint_state(body_state, hand_state)
         return self.observation.build(
-            frame, anchor_pos, anchor_quat, body_state.base_ang_vel, joint_pos, joint_vel, self._last_action
+            frame, anchor_quat, body_state.base_ang_vel, joint_pos, joint_vel, self._last_action
         )
 
     def act(self, observation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

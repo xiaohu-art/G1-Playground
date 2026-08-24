@@ -27,6 +27,7 @@ struct InspireStateSnapshot {
     double age_seconds = 0.0;
     std::vector<double> q = std::vector<double>(kInspireSlots, 1.0);
     std::vector<double> dq = std::vector<double>(kInspireSlots, 0.0);
+    std::vector<std::uint32_t> lost = std::vector<std::uint32_t>(kInspireSlots, 0);
 };
 
 struct InspireCommandSnapshot {

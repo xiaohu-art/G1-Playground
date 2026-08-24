@@ -113,6 +113,35 @@ class TestMotionPlayback(unittest.TestCase):
         self.assertEqual(len(env.commands), 4)
         self.assertEqual(len(hand_env.commands), 4)
 
+    def test_an_optional_blend_advances_the_reference_without_replaying_frames(self):
+        env = FakeEnv()
+        hand_env = FakeHandEnv()
+        seen_frames = []
+
+        class Policy:
+            dt = 0.0
+            motion = SimpleNamespace(num_frames=4)
+
+            def get_observation(self, frame, *args):
+                seen_frames.append(frame)
+                return np.asarray([frame], dtype=np.float32)
+
+            def act(self, observation):
+                return np.full(29, observation[0]), np.full(12, observation[0])
+
+        policy = Policy()
+        start_frame = self.module.blend_into_policy(
+            env,
+            hand_env,
+            policy,
+            2,
+            np.zeros(29),
+            np.zeros(12),
+        )
+        self.module.run_motion(env, hand_env, policy, log=None, start_frame=start_frame)
+        self.assertEqual(start_frame, 2)
+        self.assertEqual(seen_frames, [0, 1, 2, 3])
+
     def test_capture_uses_a_valid_frame_and_aligns_once(self):
         env = FakeEnv()
         hand_env = FakeHandEnv()

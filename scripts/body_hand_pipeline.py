@@ -50,8 +50,8 @@ def pace(started: float, dt: float) -> None:
         time.sleep(remaining)
 
 
-def policy_command(policy, frame, state, hand_state, odometry):
-    observation = policy.get_observation(frame, odometry.position, anchor_quat(state), state, hand_state)
+def policy_command(policy, frame, state, hand_state):
+    observation = policy.get_observation(frame, anchor_quat(state), state, hand_state)
     return policy.act(observation)
 
 
@@ -80,13 +80,18 @@ def capture_origin(env, hand_env, policy) -> None:
     logger.warning("Reference aligned to the current robot pose")
 
 
-def blend_into_policy(env, hand_env, policy, steps, reference_body, reference_hand) -> None:
-    logger.warning("Blending into the closed-loop policy over %.1f seconds", steps * policy.dt)
-    for index in range(steps):
+def blend_into_policy(env, hand_env, policy, steps, reference_body, reference_hand) -> int:
+    """Optionally blend while advancing the dynamic reference; return consumed frames."""
+    frames = min(max(int(steps), 0), policy.motion.num_frames)
+    if frames == 0:
+        return 0
+    logger.warning("Blending into the advancing closed-loop policy over %.1f seconds", frames * policy.dt)
+    for frame in range(frames):
         started = time.monotonic()
-        state, hand_state, odometry = read_frame(env, hand_env)
-        policy_body, policy_hand = policy_command(policy, 0, state, hand_state, odometry)
-        alpha = (index + 1) / steps
+        state, hand_state, _ = read_frame(env, hand_env)
+        policy_body, policy_hand = policy_command(policy, frame, state, hand_state)
+        progress = (frame + 1) / frames
+        alpha = progress * progress * (3.0 - 2.0 * progress)
         send_command(
             env,
             hand_env,
@@ -94,6 +99,7 @@ def blend_into_policy(env, hand_env, policy, steps, reference_body, reference_ha
             (1.0 - alpha) * reference_hand + alpha * policy_hand,
         )
         pace(started, policy.dt)
+    return frames
 
 
 def record_policy_frame(log, elapsed, state, hand_state, odometry, body_target, hand_target, policy, env) -> None:
@@ -107,13 +113,13 @@ def record_policy_frame(log, elapsed, state, hand_state, odometry, body_target, 
     record(log, elapsed, state, body_target, odometry, env)
 
 
-def run_motion(env, hand_env, policy, log) -> None:
-    logger.warning("Running all %d reference frames once", policy.motion.num_frames)
+def run_motion(env, hand_env, policy, log, start_frame=0) -> None:
+    logger.warning("Running reference frames %d through %d once", start_frame, policy.motion.num_frames - 1)
     origin = time.monotonic()
-    for frame in range(policy.motion.num_frames):
+    for frame in range(start_frame, policy.motion.num_frames):
         started = time.monotonic()
         state, hand_state, odometry = read_frame(env, hand_env)
-        body_target, hand_target = policy_command(policy, frame, state, hand_state, odometry)
+        body_target, hand_target = policy_command(policy, frame, state, hand_state)
         send_command(env, hand_env, body_target, hand_target)
         record_policy_frame(
             log,
@@ -179,7 +185,7 @@ def run(cfg: DictConfig) -> None:
             hand_state.joint_pos,
         )
         capture_origin(env, hand_env, policy)
-        blend_into_policy(
+        start_frame = blend_into_policy(
             env,
             hand_env,
             policy,
@@ -187,7 +193,7 @@ def run(cfg: DictConfig) -> None:
             reference_body,
             reference_hand,
         )
-        run_motion(env, hand_env, policy, log)
+        run_motion(env, hand_env, policy, log, start_frame=start_frame)
     except KeyboardInterrupt:
         logger.info("Interrupted by operator")
     finally:

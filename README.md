@@ -1,13 +1,18 @@
 # G1-Playground
 
-G1-Playground is a focused deployment runtime for the **Unitree G1 29DoF** and the
-`UnitreeWoGaitPolicy` locomotion checkpoint from
-[unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab). Simulation and hardware use the same policy loop and
+G1-Playground is a focused deployment runtime for the **Unitree G1 29DoF**. It serves three policy families:
+
+- the `UnitreeWoGaitPolicy` locomotion checkpoint from [unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab);
+- a whole-body **track** policy for standing reference tracking;
+- a **body-hand HOI** policy (`proprio-no-depth-v1`, trained in the sibling `hoi/` Isaac Lab workspace) that tracks a
+  clipped reference motion with all 29 body joints plus 12 Inspire-hand joints.
+
+Simulation and hardware use the same policy loop and
 the same DDS-facing `G1Env`; the selected endpoint, operator input, and hardware activation requirement differ.
 
 | Hydra deployment | Controller | G1 environment | Endpoint |
 | --- | --- | --- | --- |
-| `deployment=sim` (default) | `JoystickCtrl` | `G1Env` | Domain 1 / `lo` → standalone MuJoCo DDS server |
+| `deployment=sim` (default) | `KeyboardCtrl` | `G1Env` | Domain 1 / `lo` → standalone MuJoCo DDS server |
 | `deployment=real` | `UnitreeCtrl` | `G1Env` | Domain 0 / robot-facing interface → G1 |
 
 The public runtime path is `Policy → G1Env → DDS → real G1 / MuJoCo server`. `G1Env` does not select or directly
@@ -55,17 +60,26 @@ Hydra composes one robot, one policy, and one of two deployment profiles:
 
 ```text
 configs/
-├── run_pipeline.yaml
+├── run_pipeline.yaml            # locomotion-only client
+├── run_body_hand.yaml           # body-hand HOI client
+├── run_loco_largebox_track.yaml # loco → body-hand HOI → stand-track handover
 ├── robot/
-│   └── g1.yaml
+│   ├── g1.yaml
+│   └── inspire.yaml
 ├── policy/
-│   └── unitree_wo_gait.yaml
+│   ├── unitree_wo_gait.yaml
+│   ├── track.yaml
+│   └── body_hand_distill_largebox.yaml
+├── motion/
+│   └── largebox_039_v00.yaml
 └── deployment/
     ├── sim.yaml
     └── real.yaml
 ```
 
-`run_pipeline.yaml` is the only Hydra composition root. The simulator launcher reads `robot/g1.yaml` and
+`run_pipeline.yaml` is the locomotion composition root; `run_body_hand.yaml` and `run_loco_largebox_track.yaml` compose the
+body-hand HOI runtime described in [Body-Hand HOI Deployment](#body-hand-hoi-deployment). The simulator launcher reads
+`robot/g1.yaml` and
 `deployment/sim.yaml` directly, reusing the checked-in XML, torque limits, and default DDS endpoint instead of duplicating
 them. It uses the backend's 1 ms default timestep, the server's 0.1-second default watchdog, and a launcher-owned 60 Hz
 viewer constant.
@@ -131,9 +145,9 @@ If the local simulation endpoint must change, edit `configs/deployment/sim.yaml`
 apply a one-sided `env.domain_id`, `env.net_if`, or topic override to the policy client: the standalone server intentionally
 reads the shared file directly.
 
-Connect an Xbox-compatible controller to command motion. The left stick controls forward/backward and lateral velocity;
-horizontal movement of the right stick controls yaw. Press `A` to request software shutdown. With no local controller,
-the launcher holds every axis at zero and logs a warning; use `Ctrl+C` to stop that terminal.
+The sim profile drives with the keyboard: arrow keys command forward/backward and turning, shift+arrows strafe, and `esc`
+requests software shutdown. If keyboard input goes stale, the launcher zeroes every axis; use `Ctrl+C` to stop that
+terminal.
 
 The server keeps elastic support enabled before the first valid LowCmd, holds full support for the 3-second standing ramp,
 then releases it over the 5-second policy blend. A valid command older than the current 0.1-second simulator timeout stops
@@ -177,25 +191,141 @@ directly against the physical G1; it neither constructs nor depends on the simul
 The Unitree remote uses the same velocity axes as the local simulation controller. Keep the independent hardware stop
 guarded throughout the run and press `A` for software shutdown at the first sign of instability.
 
+## Body-Hand HOI Deployment
+
+The body-hand runtime deploys `proprio-no-depth-v1`, a proprioception-only whole-body checkpoint distilled in the
+sibling `hoi/` Isaac Lab workspace (`logs/rsl_rl/g1_inspire_hoi_depth`). It tracks a staged reference motion clip with
+29 body joints and 12 Inspire-hand joints; the intermediate/distal finger joints follow through the mimic table in
+`configs/robot/inspire.yaml`.
+
+Contract, pinned by `configs/policy/body_hand_distill_largebox.yaml` and the exported graph:
+
+| Boundary | Value |
+| --- | --- |
+| Checkpoint | `assets/models/body_hand_distill/largebox/policy.onnx` (+ `policy.onnx.data`), normalization baked into the graph |
+| Observation | 728: future joint pos/vel (2×265), future anchor linear velocity in the pelvis frame (15), future anchor orientation rot6d (30), base angular velocity (3), relative joint pos (53), joint vel (53), projected gravity (3), last action (41) |
+| Action | 41 position targets = 29 body + 12 hand, scale 1.0 around the default pose |
+| Rate | 50 Hz |
+
+The observation carries no anchor *position*, so the policy does not consume odometry; the startup capture still calls
+`env.set_born_place(...)` so the IMU yaw and the reference clip share one heading frame. The staged clip is clip 0
+(`teacher_ref5_env4_ep1`, 294 source frames, walking) extracted from the packed training set
+`hoi/data/train/track_H20_var5_1perclip.npz` (208 clips). To stage a different clip:
+
+```bash
+python scripts/prepare_hoi_motion.py --clip <index-or-name> --out-name sub16_largebox_039_v00
+```
+
+> [!NOTE]
+> The `largebox` file and variable names are kept from the previous checkpoint on purpose; the deployed assets are the
+> H20-track clip and the `proprio-no-depth-v1` graph.
+
+Before any DDS run, the in-process MuJoCo smoke test closes the loop around the deployed graph without a viewer:
+
+```bash
+python scripts/sim_hoi_smoke.py
+```
+
+It plays the deployable source and terminal frames at 50 Hz with PD torques at 1 kHz. It fails if the robot loses the
+reference, falls, or reaches the end above the hardware return-handoff velocity limits.
+
+### Body-hand simulation
+
+The hand-aware simulator serves the Inspire topics; start it first, then the pipeline client:
+
+```bash
+# Terminal 1
+python scripts/simulate.py --inspire
+# Terminal 2: body-hand clip only
+python scripts/body_hand_pipeline.py deployment=sim
+# or the full handover: locomotion → body-hand clip → standing tracker
+python scripts/loco_body_hand_pipeline.py deployment=sim
+```
+
+`body_hand_pipeline.py` ramps to the first reference pose, captures the heading origin, and starts the dynamic reference
+without freezing frame 0. `loco_body_hand_pipeline.py` starts in driven locomotion and, when the operator presses `]`,
+keeps locomotion closed-loop at zero command until the base has remained stable for ten consecutive frames. The standing
+tracker then walks the live whole-body reference to HOI frame 0 over 4 seconds. The source clip ends in a high-speed phase,
+so its deployment config stops at validated frame 275 and appends a two-second zero-velocity terminal reference. The HOI
+policy sees the terminal reference through its future window and brakes before handoff. The pipeline then requires ten
+consecutive stable frames, preserves the last target actually sent to the robot, and rate-limits the first standing-tracker
+command. This keeps the policy histories and physical command continuous. Keyboard input is required in the sim terminal;
+the real profile uses the Unitree remote.
+
+`motion.terminal_frame` is clip-specific. If it is omitted, `null`, or `-1`, the loader uses the clip's last source frame;
+an explicitly configured non-negative frame overrides that default. Clip-specific values belong in the selected
+`configs/motion/*.yaml` fragment rather than in policy or pipeline code.
+
+### Body-hand hardware
+
+> [!CAUTION]
+> The same hardware-safety checklist as [Run on a Real G1](#run-on-a-real-g1) applies, plus the Inspire hands. Freeze the
+> terminal frame into a quasi-static hold and run that first; only then play the full clip:
+
+```bash
+python scripts/prepare_terminal_hold_motion.py \
+  --motion hoi/data/train/track_H20_var5_1perclip.npz --clip-name teacher_ref5_env4_ep1
+python scripts/body_hand_pipeline.py deployment=real env.net_if=enP8p1s0
+```
+
+The hold clip lands next to the staged motion; point `configs/motion/largebox_039_v00.yaml` at it for the first hardware
+run, then restore the full clip.
+
+Three additional H20 clips have passed both the checkpoint's clip-wise Isaac evaluation and the deployment MuJoCo smoke
+test. Each full-motion config has a matching static preflight config captured at the same validated terminal frame:
+
+| Full motion | Source clip | Terminal frame | Static preflight |
+| --- | --- | ---: | --- |
+| `motion=h20_clip_006` | `teacher_ref21_env20_ep1` | 276 | `motion=h20_clip_006_hold` |
+| `motion=h20_clip_007` | `teacher_ref22_env21_ep1` | 273 | `motion=h20_clip_007_hold` |
+| `motion=h20_clip_009` | `teacher_ref24_env23_ep1` | 286 | `motion=h20_clip_009_hold` |
+| `motion=h20_clip_014` | `teacher_ref15_env14_ep1` | 274 | `motion=h20_clip_014_hold` |
+| `motion=h20_clip_093` | `teacher_ref99_env98_ep1` | 366 | `motion=h20_clip_093_hold` |
+
+For each clip, run the static preflight on hardware before selecting the full motion. The composition roots need no edits:
+
+```bash
+python scripts/body_hand_pipeline.py deployment=real motion=h20_clip_006_hold env.net_if=enP8p1s0
+python scripts/body_hand_pipeline.py deployment=real motion=h20_clip_006 env.net_if=enP8p1s0
+```
+
+Substitute `007`, `009`, `014`, or `093` as needed. The same `motion=...` overrides also work with
+`scripts/loco_body_hand_pipeline.py` and `deployment=sim`.
+
+For train↔deploy parity, record an Isaac-side trace with `hoi/scripts/rsl_rl/play.py --parity_trace <path>` and point
+`G1_PLAYGROUND_BODY_HAND_BUNDLE` at its directory (default: the checkpoint's `exported/` folder);
+`tests/test_body_hand_observation.py::TestParityTrace` then rebuilds the observation from the recorded robot state and
+replays the actions through the deployed ONNX.
+
 ## Project Layout
 
-- `configs/run_pipeline.yaml`: Hydra policy-client defaults.
+- `configs/run_pipeline.yaml`: Hydra policy-client defaults for locomotion.
+- `configs/run_body_hand.yaml`, `configs/run_loco_largebox_track.yaml`: body-hand and full-handover composition roots.
 - `configs/robot/g1.yaml`: G1 XML, runtime joint order, and simulator torque limits.
+- `configs/robot/inspire.yaml`: Inspire-hand scene, runtime joints, limits, and the finger mimic table.
 - `configs/policy/unitree_wo_gait.yaml`: checkpoint, one policy DoF block, scales, and maximum commands.
+- `configs/policy/body_hand_distill_largebox.yaml`: body-hand graph path, 53-joint observation order, action split, and PD gains.
+- `configs/motion/largebox_039_v00.yaml`: the staged body-hand reference clip.
 - `configs/deployment/`: endpoint/topics, MotionSwitcher requirement, and controller target for `sim` and `real`.
 - `g1_playground/g1_env.py`: the single policy-facing G1 state/target contract and native DDS client adapter.
-- `g1_playground/policy/`: `UnitreeWoGaitPolicy` inference and observation construction.
-- `g1_playground/controller/`: Xbox and Unitree remote input.
+- `g1_playground/policy/`: `UnitreeWoGaitPolicy`, `TrackPolicy`, and `BodyHandPolicy` inference and observation construction.
+- `g1_playground/inspire/`: Inspire-hand DDS env, stroke conversion, and the MuJoCo hand adapter.
+- `g1_playground/controller/`: Xbox, keyboard, and Unitree remote input.
 - `g1_playground/simulation/`: retained `G1MujocoBackend`, elastic support, and the viewer-free DDS-server loop.
 - `g1_playground/utils/math.py`: pure quaternion/gravity and tilt calculations.
-- `scripts/pipeline.py`: the Hydra composition root and explicit startup/active policy loop for both deployments.
+- `scripts/pipeline.py`: the locomotion Hydra composition root and explicit startup/active policy loop for both deployments.
+- `scripts/body_hand_pipeline.py`, `scripts/loco_body_hand_pipeline.py`: body-hand runners for both deployments.
+- `scripts/prepare_hoi_motion.py`: packs one training clip into the deployment motion format.
+- `scripts/prepare_terminal_hold_motion.py`: freezes one reference frame into a quasi-static hold clip.
+- `scripts/sim_hoi_smoke.py`: viewer-free closed-loop MuJoCo smoke test for the body-hand deployment.
 - `scripts/simulate.py`: direct-config, mandatory-viewer HG DDS simulator on Domain 1/`lo` for
-  `deployment=sim`.
+  `deployment=sim`; `--inspire` loads the hand-aware model.
 - `third_party/unitree_cpp/src/g1_dds_control_endpoint.cpp`: native policy-side LowCmd/LowState endpoint used by both
   deployments.
 - `third_party/unitree_cpp/src/g1_dds_robot_endpoint.cpp`: native simulated-robot LowCmd/LowState endpoint used only by
   `deployment=sim`.
 - `third_party/`: pinned vendor source trees and licenses; the legacy MuJoCo viewer is not a runtime dependency.
+- `hoi/`: the sibling Isaac Lab training workspace (checkpoint source); it is not a Python dependency of this runtime.
 
 ## Documentation
 
@@ -217,7 +347,13 @@ pre-commit run --all-files
 ```
 
 The ordinary suite instantiates the viewer-free backend/server layers directly and does not require the GUI launcher. The
-opt-in local DDS loopback is:
+body-hand deployment additionally has the viewer-free closed-loop smoke test:
+
+```bash
+python scripts/sim_hoi_smoke.py
+```
+
+The opt-in local DDS loopback is:
 
 ```bash
 G1_PLAYGROUND_RUN_DDS_LOOPBACK=1 python -m unittest tests.test_dds_loopback -v

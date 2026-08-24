@@ -17,7 +17,6 @@ from tests.body_hand_helpers import (
     policy_cfg,
     policy_data,
     session,
-    training_bundle,
 )
 from tests.config_helpers import compose_config
 
@@ -62,7 +61,44 @@ class TestBodyHandPolicy(unittest.TestCase):
         cls.config = policy_data()
 
     def test_the_complete_motion_is_loaded(self):
-        self.assertEqual(self.policy.motion.num_frames, 414)
+        self.assertEqual(self.policy.motion.source_num_frames, 276)
+        self.assertEqual(self.policy.motion.terminal_hold_frames, 100)
+        self.assertEqual(self.policy.motion.num_frames, 376)
+
+    def test_terminal_frame_defaults_to_the_last_source_frame(self):
+        config = motion_cfg()
+        config.terminal_frame = None
+        config.terminal_hold_seconds = 0.0
+        policy = build_policy(motion=config)
+        self.assertEqual(policy.motion.source_num_frames, 294)
+        self.assertEqual(policy.motion.num_frames, 294)
+
+    def test_negative_one_also_selects_the_last_source_frame(self):
+        config = motion_cfg()
+        config.terminal_frame = -1
+        config.terminal_hold_seconds = 0.0
+        policy = build_policy(motion=config)
+        self.assertEqual(policy.motion.source_num_frames, 294)
+
+    def test_the_appended_terminal_reference_is_static(self):
+        motion = self.policy.motion
+        start = motion.source_num_frames
+        terminal_joint_pos = np.repeat(
+            motion.joint_pos[start - 1 : start], motion.terminal_hold_frames, axis=0
+        )
+        np.testing.assert_allclose(
+            motion.joint_pos[start:], terminal_joint_pos
+        )
+        np.testing.assert_allclose(motion.joint_vel[start:], 0.0)
+        np.testing.assert_allclose(
+            motion.raw_anchor_pos[start:],
+            np.repeat(motion.raw_anchor_pos[start - 1 : start], motion.terminal_hold_frames, axis=0),
+        )
+        np.testing.assert_allclose(
+            motion.raw_anchor_quat[start:],
+            np.repeat(motion.raw_anchor_quat[start - 1 : start], motion.terminal_hold_frames, axis=0),
+        )
+        np.testing.assert_allclose(motion.raw_anchor_lin_vel[start:], 0.0)
 
     def test_targets_are_split_by_joint_name(self):
         names = list(self.config["action"]["body"]["joint_names"]) + list(self.config["action"]["hand"]["joint_names"])
@@ -119,10 +155,10 @@ class TestBodyHandPolicy(unittest.TestCase):
         body_state = SimpleState(np.zeros(29), np.zeros(29), np.zeros(3))
         hand_state = SimpleState(np.zeros(12), np.zeros(12))
         np.testing.assert_allclose(policy.last_action, 0.0)
-        policy.act(policy.get_observation(0, np.zeros(3), IDENTITY, body_state, hand_state))
+        policy.act(policy.get_observation(0, IDENTITY, body_state, hand_state))
         action = policy.last_action
         self.assertGreater(float(np.abs(action).max()), 0.0)
-        observation = policy.get_observation(0, np.zeros(3), IDENTITY, body_state, hand_state)
+        observation = policy.get_observation(0, IDENTITY, body_state, hand_state)
         np.testing.assert_allclose(observation[-policy.action_dim :], action, atol=1e-6)
 
     def test_the_policy_keeps_no_observation_state(self):
@@ -138,7 +174,7 @@ class TestBodyHandPolicy(unittest.TestCase):
         policy = build_policy()
         body_state = SimpleState(np.zeros(29), np.zeros(29), np.zeros(3))
         hand_state = SimpleState(np.zeros(12), np.zeros(12))
-        observation = policy.get_observation(0, np.zeros(3), IDENTITY, body_state, hand_state)
+        observation = policy.get_observation(0, IDENTITY, body_state, hand_state)
         policy.act(observation)
         policy.infer = lambda values: np.full(policy.action_dim, np.nan, dtype=np.float32)
         with self.assertRaises(RuntimeError):
@@ -152,7 +188,7 @@ class TestBodyHandPolicy(unittest.TestCase):
         original = policy.infer
         policy.infer = lambda values: (seen.append(values.copy()), original(values))[1]
         for _ in range(3):
-            observation = policy.get_observation(0, np.zeros(3), IDENTITY, body_state, hand_state)
+            observation = policy.get_observation(0, IDENTITY, body_state, hand_state)
             policy.act(observation)
             np.testing.assert_allclose(observation, seen[-1], atol=0.0)
             self.assertFalse(np.array_equal(observation[-policy.action_dim :], policy.last_action))
@@ -228,9 +264,11 @@ class TestConfigurationOwnership(unittest.TestCase):
         cfg = policy_cfg()
         self.assertNotEqual(list(cfg.action.body.joint_names), body_joint_names())
 
-    def test_the_motion_fragment_only_selects_the_file(self):
+    def test_the_motion_fragment_selects_the_file_and_safe_terminal_hold(self):
         cfg = motion_cfg()
-        self.assertEqual(set(cfg), {"file"})
+        self.assertEqual(set(cfg), {"file", "terminal_frame", "terminal_hold_seconds"})
+        self.assertEqual(int(cfg.terminal_frame), 275)
+        self.assertEqual(float(cfg.terminal_hold_seconds), 2.0)
 
     def test_the_runner_owns_startup_and_recording(self):
         root = OmegaConf.load(CONFIG_DIR / "run_body_hand.yaml")
@@ -254,21 +292,29 @@ class TestConfigurationOwnership(unittest.TestCase):
         self.assertEqual(adapter.fit(cfg.action.body.control.damping).shape, (29,))
 
     def test_the_gains_match_the_training_configuration(self):
-        bundle = training_bundle()
-        if bundle is None:
-            self.skipTest("training bundle is not available")
-        import yaml
-
-        with open(bundle / "deployment_contract.yaml") as handle:
-            contract = yaml.safe_load(handle)
-        self.assertIsNone(contract["action_clip_41"])
-        names = contract["joint_names_53"]
+        # Values from the new policy's training env (g1_inspire_hoi_depth actuator groups).
+        training_gains = {
+            "hip_pitch": (40.1792, 2.5579),
+            "hip_roll": (99.0984, 6.3088),
+            "hip_yaw": (40.1792, 2.5579),
+            "knee": (99.0984, 6.3088),
+            "ankle": (28.5012, 1.8144),
+            "waist_yaw": (40.1792, 2.5579),
+            "waist_roll": (28.5012, 1.8144),
+            "waist_pitch": (28.5012, 1.8144),
+            "shoulder": (14.2506, 0.9072),
+            "elbow": (14.2506, 0.9072),
+            "wrist_roll": (14.2506, 0.9072),
+            "wrist_pitch": (16.7783, 1.0681),
+            "wrist_yaw": (16.7783, 1.0681),
+        }
         cfg = policy_cfg()
         control = cfg.action.body.control
         for index, name in enumerate(cfg.action.body.joint_names):
-            slot = names.index(name)
-            self.assertAlmostEqual(float(control.stiffness[index]), float(contract["joint_stiffness_53"][slot]), 3)
-            self.assertAlmostEqual(float(control.damping[index]), float(contract["joint_damping_53"][slot]), 3)
+            group = next(key for key in training_gains if key in name)
+            stiffness, damping = training_gains[group]
+            self.assertAlmostEqual(float(control.stiffness[index]), stiffness, places=3)
+            self.assertAlmostEqual(float(control.damping[index]), damping, places=3)
 
     def test_the_staged_motion_matches_the_policy_config(self):
         cfg = policy_cfg()

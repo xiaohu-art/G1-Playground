@@ -1,3 +1,6 @@
 # @package motion
 
 file: assets/motions/largebox/sub16_largebox_039_v00.npz
+# Clip-specific override. Omit it, set it to null, or use -1 to select the last source frame.
+terminal_frame: 275
+terminal_hold_seconds: 2.0

@@ -204,7 +204,8 @@ void bind_InspireDdsEndpoint(py::module_& m) {
         .def_readonly("sequence", &InspireStateSnapshot::sequence)
         .def_readonly("age_seconds", &InspireStateSnapshot::age_seconds)
         .def_readonly("q", &InspireStateSnapshot::q)
-        .def_readonly("dq", &InspireStateSnapshot::dq);
+        .def_readonly("dq", &InspireStateSnapshot::dq)
+        .def_readonly("lost", &InspireStateSnapshot::lost);
 
     py::class_<InspireCommandSnapshot>(m, "InspireCommandSnapshot")
         .def(py::init<>())

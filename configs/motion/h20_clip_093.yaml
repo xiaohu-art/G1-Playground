@@ -1,0 +1,6 @@
+# @package motion
+
+# teacher_ref99_env98_ep1 (packed clip 93, 389 frames at 50 Hz).
+file: assets/motions/largebox/h20_clip_093.npz
+terminal_frame: 366
+terminal_hold_seconds: 2.0
