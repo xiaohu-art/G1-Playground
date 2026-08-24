@@ -29,7 +29,7 @@ class TestHydraConfig(unittest.TestCase):
                 "deployment/real.yaml",
                 "robot/g1.yaml",
                 "robot/inspire.yaml",
-                "policy/unitree_wo_gait.yaml",
+                "policy/leggedlab_g1.yaml",
                 "policy/track.yaml",
                 "policy/body_hand_distill_largebox.yaml",
                 "motion/h20_clip_006.yaml",
@@ -52,7 +52,7 @@ class TestHydraConfig(unittest.TestCase):
         self.assertEqual(set(root), {"defaults", "device", "recording", "env", "hydra"})
 
         robot_path = CONFIG_DIR / "robot/g1.yaml"
-        policy_path = CONFIG_DIR / "policy/unitree_wo_gait.yaml"
+        policy_path = CONFIG_DIR / "policy/leggedlab_g1.yaml"
         self.assertGreater(robot_path.stat().st_size, 0)
         self.assertGreater(policy_path.stat().st_size, 0)
 
@@ -127,12 +127,12 @@ class TestHydraConfig(unittest.TestCase):
             self.assertNotIn("run_fullspeed", cfg)
 
     def test_policy_contract_is_owned_by_the_policy(self):
-        from g1_playground.policy import UnitreeWoGaitPolicy
+        from g1_playground.policy import LeggedLabPolicy
         from g1_playground.utils.dof import compose_dof_config
 
-        self.assertEqual(UnitreeWoGaitPolicy.FREQ, 50)
-        self.assertEqual(UnitreeWoGaitPolicy.HISTORY_LENGTH, 5)
-        self.assertEqual(sum(dim for _, dim in UnitreeWoGaitPolicy.HISTORY_LAYOUT), 96)
+        self.assertEqual(LeggedLabPolicy.FREQ, 50)
+        self.assertEqual(LeggedLabPolicy.HISTORY_LENGTH, 1)
+        self.assertEqual(sum(dim for _, dim in LeggedLabPolicy.HISTORY_LAYOUT), 96)
 
         mutations = {
             "joint names": lambda cfg: setattr(cfg.policy.dof, "joint_names", list(cfg.policy.dof.joint_names[:-1])),
@@ -148,7 +148,7 @@ class TestHydraConfig(unittest.TestCase):
                 effective_dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
                 mutate(cfg)
                 with self.assertRaises(ValueError):
-                    UnitreeWoGaitPolicy(cfg.policy, device="cpu", dof_cfg=effective_dof)
+                    LeggedLabPolicy(cfg.policy, device="cpu", dof_cfg=effective_dof)
 
     def test_launcher_is_native_hydra_without_argparse(self):
         module = ast.parse(LAUNCHER.read_text(), filename=LAUNCHER.as_posix())
@@ -183,7 +183,7 @@ class TestHydraConfig(unittest.TestCase):
         policy_calls = [
             node
             for node in ast.walk(run)
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "UnitreeWoGaitPolicy"
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "LeggedLabPolicy"
         ]
         instantiate_calls = sorted(
             (

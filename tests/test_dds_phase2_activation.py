@@ -27,7 +27,7 @@ def load_pipeline_for_test():
     logger_module = types.ModuleType("g1_playground.utils.logger")
     logger_module.setup_logger = lambda: None
     policy_module = types.ModuleType("g1_playground.policy")
-    policy_module.UnitreeWoGaitPolicy = object
+    policy_module.LeggedLabPolicy = object
     with patch.dict(
         sys.modules,
         {"g1_playground.policy": policy_module, "g1_playground.utils.logger": logger_module},
@@ -531,7 +531,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         controller = FakeController()
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: object()
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = lambda component, **kwargs: env if component is cfg.env else controller
         with patch.object(launcher, "is_upright", return_value=True) as is_upright:
             launcher.run(cfg)
@@ -591,7 +591,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         controller = FakeController()
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: object()
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = lambda component, **kwargs: env if component is cfg.env else controller
         launcher.time = SimpleNamespace(
             monotonic=lambda: 100.0,
@@ -694,7 +694,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
 
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: effective_dof
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = fake_instantiate
         launcher.is_upright = mark_upright
         launcher.time = SimpleNamespace(monotonic=lambda: 100.0, sleep=sleep_durations.append)
@@ -778,7 +778,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         cfg = compose_config("real")
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: effective_dof
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = fake_instantiate
         launcher.is_upright = lambda quaternion: True
         launcher.time = SimpleNamespace(monotonic=lambda: 100.0, sleep=lambda duration: None)

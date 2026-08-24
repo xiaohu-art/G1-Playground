@@ -22,7 +22,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from g1_playground.inspire.hand_env import InspireHandEnv
-from g1_playground.policy import UnitreeWoGaitPolicy
+from g1_playground.policy import LeggedLabPolicy
 from g1_playground.policy.body_hand import BodyHandPolicy
 from g1_playground.policy.track import TrackPolicy
 from g1_playground.utils.dof import compose_dof_config
@@ -524,7 +524,7 @@ def run(cfg: DictConfig) -> None:
     try:
         loco_dof = compose_dof_config(cfg.robot.dof, cfg.loco.dof)
         stand_dof = compose_dof_config(cfg.robot.dof, cfg.stand_track.dof)
-        loco = UnitreeWoGaitPolicy(cfg.loco, device=cfg.device, dof_cfg=loco_dof)
+        loco = LeggedLabPolicy(cfg.loco, device=cfg.device, dof_cfg=loco_dof)
         largebox = BodyHandPolicy(
             cfg.largebox,
             cfg.motion,

@@ -23,7 +23,7 @@ policy pose/gains into runtime joint order, constructs the policy, then injects 
 
 ```python
 dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+policy = LeggedLabPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
 env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
 controller = instantiate(cfg.controller, env=env)
 ```

@@ -16,7 +16,7 @@ import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from g1_playground.policy import UnitreeWoGaitPolicy
+from g1_playground.policy import LeggedLabPolicy
 from g1_playground.utils.dof import compose_dof_config
 from g1_playground.utils.logger import setup_logger
 from g1_playground.utils.math import is_upright
@@ -58,7 +58,7 @@ def run(cfg: DictConfig) -> None:
     log = None
     try:
         dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-        policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+        policy = LeggedLabPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
         env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
         controller = instantiate(cfg.controller, env=env)
         if cfg.recording.enabled:

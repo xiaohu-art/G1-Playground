@@ -62,7 +62,7 @@ python scripts/pipeline.py --cfg job --resolve deployment=real env.net_if=ROBOT_
 
 This command only prints resolved configuration. Confirm Domain 0, the interface name, topics,
 `motion_switcher_required=true`, and the intended checkpoint before running without `--cfg`. The 20 ms control period is
-not duplicated in deployment YAML: `UnitreeWoGaitPolicy` owns 50 Hz, and the launcher injects `policy.dt` into `G1Env`.
+not duplicated in deployment YAML: `LeggedLabPolicy` owns 50 Hz, and the launcher injects `policy.dt` into `G1Env`.
 
 The repository convention is Domain 0 / robot NIC for `real` and Domain 1 / `lo` for `sim`. These are explicit profile
 choices, not DDS mode semantics. Never point `deployment=sim` at the robot or disable the real profile's

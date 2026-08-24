@@ -1,7 +1,7 @@
 defaults:
   - robot: g1
   - robot@inspire: inspire
-  - policy@loco: unitree_wo_gait
+  - policy@loco: leggedlab_g1
   - policy@largebox: body_hand_distill_largebox
   - policy@stand_track: track
   - motion: largebox_039_v00

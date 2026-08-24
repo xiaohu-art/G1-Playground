@@ -50,7 +50,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
 
             from pathlib import Path
             from hydra import compose, initialize_config_dir
-            from g1_playground.policy.unitree import UnitreeWoGaitPolicy
+            from g1_playground.policy.leggedlab import LeggedLabPolicy
             from g1_playground.utils.dof import compose_dof_config
             from tests.config_helpers import load_pipeline_launcher
 
@@ -78,8 +78,8 @@ class TestDdsPhase1Domain(unittest.TestCase):
             assert launcher.__name__ == "g1_playground_test_pipeline"
 
             effective_dof = compose_dof_config(sim.robot.dof, sim.policy.dof)
-            policy = UnitreeWoGaitPolicy(sim.policy, device="cpu", dof_cfg=effective_dof)
-            action = policy.get_action(np.zeros(480, dtype=np.float32))
+            policy = LeggedLabPolicy(sim.policy, device="cpu", dof_cfg=effective_dof)
+            action = policy.get_action(np.zeros(96, dtype=np.float32))
             assert action.shape == (29,)
 
             assert "pydantic" not in sys.modules

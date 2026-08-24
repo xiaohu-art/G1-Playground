@@ -3,12 +3,12 @@
 G1-Playground deliberately has one policy-facing environment boundary:
 
 ```text
-sim:  JoystickCtrl -> UnitreeWoGaitPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS
+sim:  JoystickCtrl -> LeggedLabPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS
                                                                               <-> G1DdsRobotEndpoint
                                                                                   <-> G1MujocoDdsServer
                                                                                       <-> G1MujocoBackend
 
-real: UnitreeCtrl  -> UnitreeWoGaitPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS <-> physical G1
+real: UnitreeCtrl  -> LeggedLabPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS <-> physical G1
 ```
 
 The simulator is a separate DDS peer. `G1Env` never selects a backend or calls MuJoCo, so simulation and hardware run the
@@ -33,8 +33,8 @@ Configuration ownership is intentionally narrow:
 | Source | Owned values | Runtime consumers |
 | --- | --- | --- |
 | `robot/g1.yaml` | XML, runtime joint order, torque limits | DoF composition, simulator backend/server |
-| `policy/unitree_wo_gait.yaml` | checkpoint, one DoF order/pose/gains, scales, max commands | policy, DoF composition |
-| `UnitreeWoGaitPolicy` class | 50 Hz, history length 5, field layout | policy and launcher via `policy.dt` |
+| `policy/leggedlab_g1.yaml` | checkpoint, one DoF order/pose/gains, scales, command clip | policy, DoF composition |
+| `LeggedLabPolicy` class | 50 Hz, single-frame history, field layout | policy and launcher via `policy.dt` |
 | `deployment/*.yaml` | endpoint/topics/motion/controller | `G1Env` and controller construction |
 
 There is no configured position limit. Simulator torque limits remain in robot config; hardware commands do not consume
@@ -51,7 +51,7 @@ watchdog, and the launcher owns the fixed 60 Hz viewer constant.
 
 ```python
 dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+policy = LeggedLabPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
 env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
 controller = instantiate(cfg.controller, env=env)
 ```
@@ -90,8 +90,9 @@ There is no environment/controller reset step. During ramp, blend, and the activ
 a fresh state read, controller read, shutdown check, and pure tilt check. The policy is the sole owner of history and
 therefore the only reset at the ramp/blend boundary.
 
-The policy's model layout is fixed by class constants: five field-major samples of
-`ang_vel[3], gravity[3], commands[3], dof_pos[29], dof_vel[29], actions[29]`, yielding 480 inputs and 29 outputs. Its
+The policy's model layout is fixed by class constants: one frame of
+`ang_vel[3], gravity[3], commands[3], dof_pos[29], dof_vel[29], actions[29]`, yielding 96 inputs and 29 outputs (the
+checkpoint is recurrent; its LSTM state lives inside the model). Its
 50 Hz period (`policy.dt == 0.02`) is injected into `G1Env`, which passes it to native freshness/writer behavior.
 
 ## MuJoCo DDS server

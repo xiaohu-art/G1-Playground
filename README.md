@@ -2,7 +2,8 @@
 
 G1-Playground is a focused deployment runtime for the **Unitree G1 29DoF**. It serves three policy families:
 
-- the `UnitreeWoGaitPolicy` locomotion checkpoint from [unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab);
+- the `LeggedLabPolicy` locomotion checkpoint from the [LeggedLab](https://github.com/Hellod035/LeggedLab) training framework
+  (transcribed from [LeggedLabDeploy](https://github.com/Hellod035/LeggedLabDeploy), BSD-3-Clause, hardware-verified before integration);
 - a whole-body **track** policy for standing reference tracking;
 - a **body-hand HOI** policy (`proprio-no-depth-v1`, trained in the sibling `hoi/` Isaac Lab workspace) that tracks a
   clipped reference motion with all 29 body joints plus 12 Inspire-hand joints.
@@ -24,9 +25,9 @@ native classes do not call or own each other; they only share neutral CRC and DD
 There is no direct in-process `MujocoEnv` path. Simulation is intentionally a two-process DDS system. The standalone
 server retains the repository-owned `G1MujocoBackend` physics core and always opens the official MuJoCo viewer.
 
-The policy observes and commands all 29 joints. Its 50 Hz rate, five-frame field-major history, and 480-to-29 layout are
-class-level checkpoint contracts; they are not deployment tuning fields. The checkpoint is stored at
-`assets/models/unitree/policy_wo_gait.pt`.
+The policy observes and commands all 29 joints. Its 50 Hz rate, single-frame 96-to-29 layout, and recurrent (LSTM) state
+are class-level checkpoint contracts; they are not deployment tuning fields. The checkpoint is stored at
+`assets/models/leggedlab/g1_policy.pt`.
 
 ## Installation
 
@@ -67,7 +68,7 @@ configs/
 │   ├── g1.yaml
 │   └── inspire.yaml
 ├── policy/
-│   ├── unitree_wo_gait.yaml
+│   ├── leggedlab_g1.yaml
 │   ├── track.yaml
 │   └── body_hand_distill_largebox.yaml
 ├── motion/
@@ -94,13 +95,13 @@ Hydra passes the composed `DictConfig` directly to `scripts/pipeline.py`. Its `r
 
 1. reorders the single `cfg.policy.dof` pose and gains into robot joint order with
    `compose_dof_config(cfg.robot.dof, cfg.policy.dof)`;
-2. constructs `UnitreeWoGaitPolicy`;
+2. constructs `LeggedLabPolicy`;
 3. calls `hydra.utils.instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)`;
 4. calls `instantiate(cfg.controller, env=env)`.
 
 `robot/g1.yaml` owns the XML, G1 runtime joint order, and simulator torque limits. It has no live position-limit field.
-`policy/unitree_wo_gait.yaml` owns the checkpoint plus one policy DoF block containing joint order, standing pose, and
-tuned Kp/Kd. Frequency, history length, and observation layout stay with the policy class. `G1Env` receives one complete
+`policy/leggedlab_g1.yaml` owns the checkpoint plus one policy DoF block containing joint order, standing pose, and
+tuned Kp/Kd, together with the observation scales, command clip range, and clip magnitudes. Frequency, history length, and observation layout stay with the policy class. `G1Env` receives one complete
 effective DoF configuration and the policy-owned period at construction; there is no later gain or period override.
 
 To inspect the resolved real configuration without constructing a runtime or connecting to the robot:
@@ -157,7 +158,7 @@ The simulator is a separate DDS peer outside `G1Env`; it does not load a policy 
 
 ```text
 pipeline.py
-  JoystickCtrl → UnitreeWoGaitPolicy → G1Env → G1DdsControlEndpoint
+  JoystickCtrl → LeggedLabPolicy → G1Env → G1DdsControlEndpoint
                                                                     ⇅ HG DDS
 simulate.py
   G1DdsRobotEndpoint → G1MujocoDdsServer → G1MujocoBackend → official MuJoCo viewer
@@ -303,12 +304,12 @@ replays the actions through the deployed ONNX.
 - `configs/run_body_hand.yaml`, `configs/run_loco_largebox_track.yaml`: body-hand and full-handover composition roots.
 - `configs/robot/g1.yaml`: G1 XML, runtime joint order, and simulator torque limits.
 - `configs/robot/inspire.yaml`: Inspire-hand scene, runtime joints, limits, and the finger mimic table.
-- `configs/policy/unitree_wo_gait.yaml`: checkpoint, one policy DoF block, scales, and maximum commands.
+- `configs/policy/leggedlab_g1.yaml`: checkpoint, one policy DoF block, scales, command clip range, and clip magnitudes.
 - `configs/policy/body_hand_distill_largebox.yaml`: body-hand graph path, 53-joint observation order, action split, and PD gains.
 - `configs/motion/largebox_039_v00.yaml`: the staged body-hand reference clip.
 - `configs/deployment/`: endpoint/topics, MotionSwitcher requirement, and controller target for `sim` and `real`.
 - `g1_playground/g1_env.py`: the single policy-facing G1 state/target contract and native DDS client adapter.
-- `g1_playground/policy/`: `UnitreeWoGaitPolicy`, `TrackPolicy`, and `BodyHandPolicy` inference and observation construction.
+- `g1_playground/policy/`: `LeggedLabPolicy`, `TrackPolicy`, and `BodyHandPolicy` inference and observation construction.
 - `g1_playground/inspire/`: Inspire-hand DDS env, stroke conversion, and the MuJoCo hand adapter.
 - `g1_playground/controller/`: Xbox, keyboard, and Unitree remote input.
 - `g1_playground/simulation/`: retained `G1MujocoBackend`, elastic support, and the viewer-free DDS-server loop.

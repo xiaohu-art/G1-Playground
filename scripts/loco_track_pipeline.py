@@ -23,7 +23,7 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from g1_playground.policy import UnitreeWoGaitPolicy
+from g1_playground.policy import LeggedLabPolicy
 from g1_playground.policy.track import TrackPolicy
 from g1_playground.utils.dof import compose_dof_config
 from g1_playground.utils.logger import setup_logger
@@ -131,7 +131,7 @@ def run(cfg: DictConfig) -> None:
     try:
         dof_loco = compose_dof_config(cfg.robot.dof, cfg.loco.dof)
         dof_track = compose_dof_config(cfg.robot.dof, cfg.track.dof)
-        loco = UnitreeWoGaitPolicy(cfg.loco, device=cfg.device, dof_cfg=dof_loco)
+        loco = LeggedLabPolicy(cfg.loco, device=cfg.device, dof_cfg=dof_loco)
         track = TrackPolicy(cfg.track, device=cfg.device, dof_cfg=dof_track)
         env = instantiate(cfg.env, dof_cfg=dof_loco, control_dt=loco.dt)
         controller = instantiate(cfg.controller, env=env)

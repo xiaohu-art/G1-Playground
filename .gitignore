@@ -135,3 +135,8 @@ MUJOCO_LOG.TXT
 
 # Sibling Isaac Lab training workspace (checkpoint source, own git repo)
 hoi/
+
+# Local LeggedLabDeploy reference clone (checkpoint source for the locomotion
+# policy, own git repo; the integrated policy only needs the copied checkpoint
+# under assets/models/leggedlab/)
+LeggedLabDeploy/

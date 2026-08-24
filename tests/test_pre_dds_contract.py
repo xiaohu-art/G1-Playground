@@ -11,7 +11,7 @@ import mujoco
 import numpy as np
 import torch
 
-from g1_playground.policy.unitree import UnitreeWoGaitPolicy
+from g1_playground.policy.leggedlab import LeggedLabPolicy
 from g1_playground.utils.dof import compose_dof_config
 from tests.config_helpers import compose_config
 
@@ -30,7 +30,7 @@ def sha256_file(path: Path) -> str:
 
 
 def asset_closure() -> dict[str, int | str]:
-    roots = (REPO_ROOT / "assets/models/unitree", REPO_ROOT / "assets/robots/g1")
+    roots = (REPO_ROOT / "assets/models/leggedlab", REPO_ROOT / "assets/robots/g1")
     files = sorted(path for root in roots for path in root.rglob("*") if path.is_file())
     digest = hashlib.sha256()
     total_bytes = 0
@@ -99,62 +99,72 @@ class TestPreDdsContract(unittest.TestCase):
         old_threads = torch.get_num_threads()
         try:
             torch.set_num_threads(1)
+            # Freshly loaded checkpoint (initial saved LSTM state) pins the artifact itself.
             model = torch.jit.load(checkpoint, map_location="cpu")
             model.eval()
             with torch.inference_mode():
                 output = model(input_tensor).cpu().numpy()
+
+            self.assertEqual(output.shape, (1, policy["output_size"]))
+            self.assertEqual(output.dtype, np.float32)
+            self.assertTrue(np.isfinite(output).all())
+            np.testing.assert_allclose(output[0], policy["golden_output"], rtol=1e-5, atol=1e-6)
+
+            # The runtime policy is recurrent: its constructor washes the LSTM state via
+            # RESET_WARMUP_STEPS zero-observation inferences. Replicate that exact call
+            # sequence on the checkpoint to obtain the reference for get_action().
+            runtime_policy = LeggedLabPolicy(self.g1.policy, device="cpu", dof_cfg=self.effective_dof)
+            washed = torch.jit.load(checkpoint, map_location="cpu")
+            washed.eval()
+            with torch.inference_mode():
+                for _ in range(LeggedLabPolicy.RESET_WARMUP_STEPS):
+                    washed(torch.zeros((1, policy["input_size"]), dtype=torch.float32))
+                washed_raw = washed(input_tensor.clip(-policy["clip_obs"], policy["clip_obs"])).cpu().numpy()
         finally:
             torch.set_num_threads(old_threads)
 
-        self.assertEqual(output.shape, (1, policy["output_size"]))
-        self.assertEqual(output.dtype, np.float32)
-        self.assertTrue(np.isfinite(output).all())
-        np.testing.assert_allclose(output[0], policy["golden_output"], rtol=1e-5, atol=1e-6)
-
-        runtime_policy = UnitreeWoGaitPolicy(self.g1.policy, device="cpu", dof_cfg=self.effective_dof)
         processed_action = runtime_policy.get_action(input_tensor.numpy().squeeze())
-        expected_raw = np.asarray(policy["golden_output"], dtype=np.float32)
+        expected_raw = washed_raw[0]
         np.testing.assert_allclose(processed_action, expected_raw * policy["action_scale"], rtol=1e-5, atol=1e-6)
         np.testing.assert_allclose(runtime_policy.last_action, expected_raw, rtol=1e-5, atol=1e-6)
 
-    def test_field_major_observation_layout(self):
+    def test_single_frame_observation_layout(self):
         policy_cfg = self.g1.policy
         expected = self.expected["policy"]
         policy_snapshot = {
             "action_scale": policy_cfg.action_scale,
-            "max_cmd": policy_cfg.max_cmd,
+            "command_range": {
+                "lin_vel_x": list(policy_cfg.command_range.lin_vel_x),
+                "lin_vel_y": list(policy_cfg.command_range.lin_vel_y),
+                "ang_vel_z": list(policy_cfg.command_range.ang_vel_z),
+            },
+            "clip_obs": policy_cfg.clip_obs,
+            "action_clip": policy_cfg.clip_action,
         }
         self.assertEqual(policy_snapshot, {key: expected[key] for key in policy_snapshot})
         self.assertEqual(policy_cfg.obs_scales.ang_vel, expected["obs_scales"]["ang_vel"])
+        self.assertEqual(policy_cfg.obs_scales.dof_pos, expected["obs_scales"]["dof_pos"])
         self.assertEqual(policy_cfg.obs_scales.dof_vel, expected["obs_scales"]["dof_vel"])
         self.assertEqual(expected["action_beta"], 1.0)
-        self.assertIsNone(expected["action_clip"])
+        self.assertEqual(expected["action_clip"], 100.0)
         self.assertEqual(expected["obs_scales"]["gravity"], 1.0)
-        self.assertEqual(expected["obs_scales"]["dof_pos"], 1.0)
         self.assertEqual(expected["obs_scales"]["command"], [1.0, 1.0, 1.0])
+        self.assertNotIn("max_cmd", policy_cfg)
+        self.assertNotIn("deadzone", policy_cfg)
 
-        history_layout = UnitreeWoGaitPolicy.HISTORY_LAYOUT
+        history_layout = LeggedLabPolicy.HISTORY_LAYOUT
         self.assertEqual(
             [[name, dim] for name, dim in history_layout],
             expected["history_fields"],
         )
         self.assertEqual(sum(dim for _, dim in history_layout), expected["single_sample_size"])
         self.assertEqual(
-            UnitreeWoGaitPolicy.HISTORY_LENGTH * expected["single_sample_size"],
+            LeggedLabPolicy.HISTORY_LENGTH * expected["single_sample_size"],
             expected["input_size"],
         )
 
-        policy = UnitreeWoGaitPolicy(policy_cfg, device="cpu", dof_cfg=self.effective_dof)
+        policy = LeggedLabPolicy(policy_cfg, device="cpu", dof_cfg=self.effective_dof)
         policy.history_buf.clear()
-        frames = []
-        field_dims = [dim for _, dim in history_layout]
-        for timestep in range(UnitreeWoGaitPolicy.HISTORY_LENGTH - 1):
-            frame = [
-                np.arange(dim, dtype=np.float32) + 1000 * timestep + 100 * field_index
-                for field_index, dim in enumerate(field_dims)
-            ]
-            frames.append(frame)
-            policy.history_buf.append(frame)
 
         base_ang_vel = np.array([1.0, 2.0, 3.0], dtype=np.float32)
         dof_offset = np.arange(29, dtype=np.float32) * 0.01
@@ -170,19 +180,37 @@ class TestPreDdsContract(unittest.TestCase):
         ctrl_data = {"axes": expected["golden_axes"]}
         observation = policy.get_observation(env_data, ctrl_data)
 
+        axes = expected["golden_axes"]
+        commands = np.asarray([axes["LeftY"], -axes["LeftX"], -axes["RightX"]], dtype=np.float32)
+        clip_min = np.asarray(
+            [
+                expected["command_range"]["lin_vel_x"][0],
+                expected["command_range"]["lin_vel_y"][0],
+                expected["command_range"]["ang_vel_z"][0],
+            ],
+            dtype=np.float32,
+        )
+        clip_max = np.asarray(
+            [
+                expected["command_range"]["lin_vel_x"][1],
+                expected["command_range"]["lin_vel_y"][1],
+                expected["command_range"]["ang_vel_z"][1],
+            ],
+            dtype=np.float32,
+        )
+        scaled_commands = np.clip(commands, clip_min, clip_max)
+        np.testing.assert_allclose(scaled_commands, np.asarray(expected["golden_scaled_commands"]), rtol=0.0, atol=0.0)
+
         current = [
             base_ang_vel * policy_cfg.obs_scales.ang_vel,
             np.array([0.0, 0.0, -1.0], dtype=np.float32),
-            np.asarray(expected["golden_scaled_commands"]),
-            dof_offset,
+            scaled_commands,
+            dof_offset * policy_cfg.obs_scales.dof_pos,
             dof_vel * policy_cfg.obs_scales.dof_vel,
             last_action,
         ]
-        frames.append(current)
-        expected_observation = np.concatenate(
-            [np.concatenate([frame[field_index] for frame in frames]) for field_index in range(len(field_dims))]
-        )
-        self.assertEqual(expected["packing"], "field-major")
+        expected_observation = np.concatenate(current)
+        self.assertEqual(expected["packing"], "single-frame")
         self.assertEqual(observation.shape, (expected["input_size"],))
         np.testing.assert_allclose(observation, expected_observation, rtol=0.0, atol=1e-7)
 
@@ -233,7 +261,7 @@ class TestPreDdsContract(unittest.TestCase):
             from g1_playground.controller.unitree_ctrl import UnitreeCtrl
 
             env = environment_module.G1Env(
-                control_dt=1.0 / UnitreeWoGaitPolicy.FREQ,
+                control_dt=1.0 / LeggedLabPolicy.FREQ,
                 domain_id=self.g1_real.env.domain_id,
                 net_if=self.g1_real.env.net_if,
                 lowcmd_topic=self.g1_real.env.lowcmd_topic,
