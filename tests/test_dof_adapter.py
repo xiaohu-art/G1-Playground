@@ -15,13 +15,13 @@ def runtime_names():
 
 
 def policy_names():
-    return list(OmegaConf.load(CONFIG_DIR / "policy/unitree_wo_gait.yaml").dof.joint_names)
+    return list(OmegaConf.load(CONFIG_DIR / "policy/leggedlab_g1.yaml").dof.joint_names)
 
 
 class TestCompleteSetCallers(unittest.TestCase):
     def test_compose_dof_config_owns_the_complete_set_constraint(self):
         robot = OmegaConf.load(CONFIG_DIR / "robot/g1.yaml").dof
-        policy = OmegaConf.load(CONFIG_DIR / "policy/unitree_wo_gait.yaml").dof
+        policy = OmegaConf.load(CONFIG_DIR / "policy/leggedlab_g1.yaml").dof
         self.assertEqual(list(compose_dof_config(robot, policy).joint_names), runtime_names())
 
         trimmed = OmegaConf.create(

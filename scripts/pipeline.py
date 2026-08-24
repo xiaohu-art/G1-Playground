@@ -16,7 +16,7 @@ import hydra
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from g1_playground.policy import UnitreeWoGaitPolicy
+from g1_playground.policy import LeggedLabPolicy
 from g1_playground.utils.dof import compose_dof_config
 from g1_playground.utils.logger import setup_logger
 from g1_playground.utils.math import is_upright
@@ -24,8 +24,6 @@ from g1_playground.utils.recorder import record, recorder, save_recording
 
 logger = logging.getLogger("g1_playground")
 RAMP_SECONDS = 3.0
-BLEND_SECONDS = 5.0
-ZERO_CONTROL = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0}}
 
 
 def read_frame(env, controller):
@@ -58,7 +56,7 @@ def run(cfg: DictConfig) -> None:
     log = None
     try:
         dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-        policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+        policy = LeggedLabPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
         env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
         controller = instantiate(cfg.controller, env=env)
         if cfg.recording.enabled:
@@ -92,23 +90,6 @@ def run(cfg: DictConfig) -> None:
                 logger.warning("Control frame dropped during standing ramp")
 
         policy.reset()
-
-        logger.warning("Blending into closed-loop locomotion over %.1f seconds", BLEND_SECONDS)
-        blend_steps = int(BLEND_SECONDS * policy.freq)
-        for index in range(blend_steps):
-            started = time.monotonic()
-            frame = read_frame(env, controller)
-            if frame is None:
-                return
-            state, _ = frame
-            policy_target = policy.act(state, ZERO_CONTROL)
-            alpha = (index + 1) / blend_steps
-            env.step((1.0 - alpha) * standing + alpha * policy_target)
-            remaining = policy.dt - (time.monotonic() - started)
-            if remaining > 0:
-                time.sleep(remaining)
-            elif remaining < -policy.dt:
-                logger.warning("Control frame dropped during policy blend")
 
         origin = time.monotonic()
         while True:

@@ -27,7 +27,7 @@ def load_pipeline_for_test():
     logger_module = types.ModuleType("g1_playground.utils.logger")
     logger_module.setup_logger = lambda: None
     policy_module = types.ModuleType("g1_playground.policy")
-    policy_module.UnitreeWoGaitPolicy = object
+    policy_module.LeggedLabPolicy = object
     with patch.dict(
         sys.modules,
         {"g1_playground.policy": policy_module, "g1_playground.utils.logger": logger_module},
@@ -531,7 +531,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         controller = FakeController()
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: object()
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = lambda component, **kwargs: env if component is cfg.env else controller
         with patch.object(launcher, "is_upright", return_value=True) as is_upright:
             launcher.run(cfg)
@@ -591,7 +591,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         controller = FakeController()
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: object()
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = lambda component, **kwargs: env if component is cfg.env else controller
         launcher.time = SimpleNamespace(
             monotonic=lambda: 100.0,
@@ -605,7 +605,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         self.assertEqual(events.count("activate"), 1)
         self.assertEqual(events[-1], "shutdown")
 
-    def test_startup_keeps_activation_ramp_reset_and_blend_order(self):
+    def test_startup_keeps_activation_ramp_reset_and_direct_policy_order(self):
         launcher = load_pipeline_for_test()
 
         events = []
@@ -631,6 +631,10 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
                 current_frame += 1
                 return state
 
+            @staticmethod
+            def read_odometry():
+                return None
+
             def activate_commands(self):
                 self.assert_safe_frame()
                 events.append("activate")
@@ -655,7 +659,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
             def read(self):
                 self.reads += 1
                 control = {"axes": {"LeftX": 0.3, "LeftY": 0.4, "RightX": 0.5}}
-                return control, self.reads == 10 + 1 + 150 + 250 + 1
+                return control, self.reads == 10 + 1 + 150 + 2
 
         class FakePolicy:
             freq = 50
@@ -664,15 +668,17 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
 
             def __init__(self, cfg_policy, device, dof_cfg):
                 events.append("policy.construct")
+                self.reset_done = False
 
             def act(self, state, control):
                 axes = control["axes"].copy()
                 policy_controls.append(axes)
-                events.append("policy.act.zero" if not any(axes.values()) else "policy.act.operator")
+                events.append("policy.act.active" if self.reset_done else "policy.act.dry")
                 return policy_target
 
             def reset(self):
                 events.append("policy.reset")
+                self.reset_done = True
 
         def mark_upright(quaternion):
             nonlocal safe_frame
@@ -694,29 +700,27 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
 
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: effective_dof
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = fake_instantiate
         launcher.is_upright = mark_upright
         launcher.time = SimpleNamespace(monotonic=lambda: 100.0, sleep=sleep_durations.append)
         launcher.run(cfg)
 
         self.assertEqual(events.count("activate"), 1)
-        self.assertEqual(len(commanded_targets), 150 + 250)
-        self.assertEqual(current_frame, 10 + 1 + 150 + 250 + 1)
-        self.assertEqual(len(sleep_durations), 150 + 250)
-        np.testing.assert_allclose(sleep_durations, np.full(400, 0.02), rtol=0.0, atol=1e-12)
+        self.assertEqual(len(commanded_targets), 151)
+        self.assertEqual(current_frame, 10 + 1 + 150 + 2)
+        self.assertEqual(len(sleep_durations), 151)
+        np.testing.assert_allclose(sleep_durations, np.full(151, 0.02), rtol=0.0, atol=1e-12)
         np.testing.assert_allclose(commanded_targets[0], (1.0 - 1 / 150) * initial + standing / 150)
         np.testing.assert_allclose(commanded_targets[149], standing)
-        np.testing.assert_allclose(commanded_targets[150], standing + (policy_target - standing) / 250)
-        np.testing.assert_allclose(commanded_targets[-1], policy_target)
+        np.testing.assert_allclose(commanded_targets[150], policy_target)
 
         self.assertEqual(events.count("policy.reset"), 1)
         self.assertLess(events.index("activate"), events.index("env.step"))
         self.assertLess(events.index("env.step"), events.index("policy.reset"))
-        self.assertLess(events.index("policy.reset"), events.index("policy.act.zero"))
-        self.assertEqual(len(policy_controls), 10 + 250)
-        self.assertTrue(all(any(axes.values()) for axes in policy_controls[:10]))
-        self.assertTrue(all(not any(axes.values()) for axes in policy_controls[10:]))
+        self.assertLess(events.index("policy.reset"), events.index("policy.act.active"))
+        self.assertEqual(len(policy_controls), 11)
+        self.assertTrue(all(any(axes.values()) for axes in policy_controls))
         self.assertEqual(events[-1], "shutdown")
 
     def test_command_failure_executes_shutdown(self):
@@ -778,7 +782,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
         cfg = compose_config("real")
         launcher.setup_logger = lambda: None
         launcher.compose_dof_config = lambda robot_dof, policy_dof: effective_dof
-        launcher.UnitreeWoGaitPolicy = FakePolicy
+        launcher.LeggedLabPolicy = FakePolicy
         launcher.instantiate = fake_instantiate
         launcher.is_upright = lambda quaternion: True
         launcher.time = SimpleNamespace(monotonic=lambda: 100.0, sleep=lambda duration: None)

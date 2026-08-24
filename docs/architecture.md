@@ -3,12 +3,12 @@
 G1-Playground deliberately has one policy-facing environment boundary:
 
 ```text
-sim:  JoystickCtrl -> UnitreeWoGaitPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS
+sim:  JoystickCtrl -> LeggedLabPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS
                                                                               <-> G1DdsRobotEndpoint
                                                                                   <-> G1MujocoDdsServer
                                                                                       <-> G1MujocoBackend
 
-real: UnitreeCtrl  -> UnitreeWoGaitPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS <-> physical G1
+real: UnitreeCtrl  -> LeggedLabPolicy -> G1Env -> G1DdsControlEndpoint <-> HG DDS <-> physical G1
 ```
 
 The simulator is a separate DDS peer. `G1Env` never selects a backend or calls MuJoCo, so simulation and hardware run the
@@ -33,8 +33,8 @@ Configuration ownership is intentionally narrow:
 | Source | Owned values | Runtime consumers |
 | --- | --- | --- |
 | `robot/g1.yaml` | XML, runtime joint order, torque limits | DoF composition, simulator backend/server |
-| `policy/unitree_wo_gait.yaml` | checkpoint, one DoF order/pose/gains, scales, max commands | policy, DoF composition |
-| `UnitreeWoGaitPolicy` class | 50 Hz, history length 5, field layout | policy and launcher via `policy.dt` |
+| `policy/leggedlab_g1.yaml` | checkpoint, one DoF order/pose/gains, scales, command clip | policy, DoF composition |
+| `LeggedLabPolicy` class | 50 Hz, single-frame history, field layout | policy and launcher via `policy.dt` |
 | `deployment/*.yaml` | endpoint/topics/motion/controller | `G1Env` and controller construction |
 
 There is no configured position limit. Simulator torque limits remain in robot config; hardware commands do not consume
@@ -51,7 +51,7 @@ watchdog, and the launcher owns the fixed 60 Hz viewer constant.
 
 ```python
 dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+policy = LeggedLabPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
 env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
 controller = instantiate(cfg.controller, env=env)
 ```
@@ -81,17 +81,17 @@ self_check
   -> activate command transport
   -> 3 s measured-to-standing ramp
   -> reset policy history
-  -> 5 s zero-command policy blend
-  -> paced active loop
+  -> paced active policy loop
   -> finally shutdown
 ```
 
-There is no environment/controller reset step. During ramp, blend, and the active loop, every target write is preceded by
+There is no environment/controller reset step. During ramp and the active loop, every target write is preceded by
 a fresh state read, controller read, shutdown check, and pure tilt check. The policy is the sole owner of history and
-therefore the only reset at the ramp/blend boundary.
+therefore the only reset at the ramp/active boundary.
 
-The policy's model layout is fixed by class constants: five field-major samples of
-`ang_vel[3], gravity[3], commands[3], dof_pos[29], dof_vel[29], actions[29]`, yielding 480 inputs and 29 outputs. Its
+The policy's model layout is fixed by class constants: one frame of
+`ang_vel[3], gravity[3], commands[3], dof_pos[29], dof_vel[29], actions[29]`, yielding 96 inputs and 29 outputs (the
+checkpoint is recurrent; its LSTM state lives inside the model). Its
 50 Hz period (`policy.dt == 0.02`) is injected into `G1Env`, which passes it to native freshness/writer behavior.
 
 ## MuJoCo DDS server
@@ -122,8 +122,8 @@ Python populates joint q/dq/torque, base quaternion, and gyroscope in LowState. 
 zero accelerometer/RPY/remote fields. The launcher explicitly constructs the native endpoint dictionary and supplies
 fixed HG `mode_machine=5`; user YAML contains no mode field.
 
-Before the first valid command the backend advances with zero actuator torque and full elastic support. Support stays
-full for 3 seconds from the first command and releases over 5 seconds. A command older than the server's 0.1-second
+Before the first valid command the backend advances with zero actuator torque and full elastic support. From the first
+command, support releases linearly to zero over the 3-second standing ramp so the robot reaches the ground before locomotion takes direct control. A command older than the server's 0.1-second
 default timeout terminates the simulator. Torque is clipped only here, using `robot.dof.torque_limits`.
 
 The public launcher always opens the official MuJoCo viewer. Its main thread copies coherent backend data into separate

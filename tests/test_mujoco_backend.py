@@ -56,13 +56,14 @@ class TestG1MujocoBackend(unittest.TestCase):
         )
 
         for index in range(20):
+            now = 10.0 + 0.001 * index
             state = reference.read()
             torque = (target - state.joint_pos) * np.asarray(dof.stiffness)
             torque -= state.joint_vel * np.asarray(dof.damping)
             torque_limits = np.asarray(cfg.robot.dof.torque_limits)
             torque = np.clip(torque, -torque_limits, torque_limits)
-            reference.step(torque, 1.0)
-            server.step(now=10.0 + 0.001 * index)
+            server.step(now=now)
+            reference.step(torque, server.support_scale(now))
 
         np.testing.assert_array_equal(backend.data.qpos, reference.data.qpos)
         np.testing.assert_array_equal(backend.data.qvel, reference.data.qvel)

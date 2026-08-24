@@ -33,7 +33,7 @@ def load_pipeline_launcher():
         raise RuntimeError(f"Cannot load launcher from {source_path}")
     module = importlib.util.module_from_spec(spec)
     logger_module = SimpleNamespace(setup_logger=lambda: None)
-    policy_module = SimpleNamespace(UnitreeWoGaitPolicy=object)
+    policy_module = SimpleNamespace(LeggedLabPolicy=object)
     with patch.dict(
         "sys.modules",
         {"g1_playground.policy": policy_module, "g1_playground.utils.logger": logger_module},

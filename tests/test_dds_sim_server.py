@@ -212,18 +212,18 @@ class TestG1MujocoDdsServer(unittest.TestCase):
         self.assertEqual(snapshot.gyroscope, [0.1, 0.2, 0.3])
         self.assertEqual(snapshot.wireless_remote, bytes(40))
 
-    def test_active_command_uses_full_pd_clip_and_support_schedule(self):
+    def test_active_command_uses_full_pd_clip_and_releases_support_during_the_ramp(self):
         backend = FakeBackend()
         bridge = FakeBridge(command(valid=True, age_seconds=0.0))
         server = make_server(backend, bridge)
 
-        for now in (10.0, 13.0, 15.5, 18.0):
+        for now in (10.0, 11.5, 13.0, 15.5):
             server.step(now=now)
 
         unclipped = 3.0 + 100.0 * (1.0 - 0.1) + 5.0 * (-0.5 - 0.2)
         np.testing.assert_array_equal(backend.torques, np.full((4, 29), np.clip(unclipped, -10.0, 10.0)))
         self.assertEqual(backend.read_calls, 1)
-        np.testing.assert_allclose(backend.scales, [1.0, 1.0, 0.5, 0.0], rtol=0.0, atol=1e-12)
+        np.testing.assert_allclose(backend.scales, [1.0, 0.5, 0.0, 0.0], rtol=0.0, atol=1e-12)
         np.testing.assert_array_equal(bridge.published[-1].tau_est, backend.torques[-1])
 
     def test_watchdog_allows_threshold_then_fails_closed_above_it(self):

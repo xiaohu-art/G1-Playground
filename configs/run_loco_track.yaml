@@ -1,6 +1,6 @@
 defaults:
   - robot: g1
-  - policy@loco: unitree_wo_gait
+  - policy@loco: leggedlab_g1
   - policy@track: track
   - deployment: sim
   - override hydra/job_logging: disabled

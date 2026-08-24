@@ -2,14 +2,14 @@
 
 `deployment=real` composes `G1Env + UnitreeCtrl` with Domain 0, the configured robot-facing interface, and
 `motion_switcher_required=true`. `domain_id` is only a DDS endpoint value; the launcher does not use it to recognize
-hardware. DDS simulation and hardware use the same dry frames → preflight → activation → ramp → blend →
+hardware. DDS simulation and hardware use the same dry frames → preflight → activation → ramp →
 paced-loop lifecycle and the same pre-actuation safety checks. `G1Env` uses the native `G1DdsControlEndpoint` to
 communicate directly with the physical G1. The simulation-only `G1DdsRobotEndpoint` is not constructed or required by
 the real profile.
 
 > [!CAUTION]
-> Starting `deployment=real` can command all 29 joints during the shared 3-second standing ramp and 5-second policy
-> blend. Validate the exact checkout with the mandatory-viewer simulator and `deployment=sim`, clear the robot's fall and
+> Starting `deployment=real` can command all 29 joints during the shared 3-second standing ramp and subsequent direct
+> policy control. Validate the exact checkout with the mandatory-viewer simulator and `deployment=sim`, clear the robot's fall and
 > reach envelope, use an approved support arrangement, and assign a trained operator to the independent hardware
 > emergency stop.
 
@@ -62,7 +62,7 @@ python scripts/pipeline.py --cfg job --resolve deployment=real env.net_if=ROBOT_
 
 This command only prints resolved configuration. Confirm Domain 0, the interface name, topics,
 `motion_switcher_required=true`, and the intended checkpoint before running without `--cfg`. The 20 ms control period is
-not duplicated in deployment YAML: `UnitreeWoGaitPolicy` owns 50 Hz, and the launcher injects `policy.dt` into `G1Env`.
+not duplicated in deployment YAML: `LeggedLabPolicy` owns 50 Hz, and the launcher injects `policy.dt` into `G1Env`.
 
 The repository convention is Domain 0 / robot NIC for `real` and Domain 1 / `lo` for `sim`. These are explicit profile
 choices, not DDS mode semantics. Never point `deployment=sim` at the robot or disable the real profile's
@@ -102,10 +102,10 @@ The exact sequence is:
 5. Real activation requires MotionSwitcher availability and a bounded successful release; failure raises before LowCmd
    publisher/writer creation.
 6. The robot ramps from measured pose to standing over 3 seconds.
-7. Policy history resets, then the target blends into zero-velocity closed-loop policy control over 5 seconds.
+7. Policy history resets, then the locomotion policy takes direct closed-loop control.
 8. The paced active loop continues with state/input/shutdown/tilt checks before every policy action and command.
 
-Keep both sticks released throughout the ramp and blend. Once stable, introduce only a small command and verify its
+Keep both sticks released throughout the ramp and initial policy takeover. Once stable, introduce only a small command and verify its
 direction before increasing magnitude.
 
 Native LowState acceptance checks CRC, finite motor/IMU values and expected mode. Initial readiness requires a nonzero

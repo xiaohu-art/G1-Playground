@@ -8,8 +8,7 @@ from g1_playground.utils.math import quat_inv, quat_rotate
 
 logger = logging.getLogger("g1_playground")
 
-SUPPORT_HOLD_SECONDS = 3.0
-SUPPORT_RELEASE_SECONDS = 5.0
+SUPPORT_RELEASE_SECONDS = 3.0
 
 
 class G1MujocoDdsServer:
@@ -63,11 +62,7 @@ class G1MujocoDdsServer:
         if self._first_command_time is None:
             return 1.0
         active_seconds = now - self._first_command_time
-        if active_seconds <= SUPPORT_HOLD_SECONDS:
-            return 1.0
-        if active_seconds >= SUPPORT_HOLD_SECONDS + SUPPORT_RELEASE_SECONDS:
-            return 0.0
-        return 1.0 - (active_seconds - SUPPORT_HOLD_SECONDS) / SUPPORT_RELEASE_SECONDS
+        return max(1.0 - active_seconds / SUPPORT_RELEASE_SECONDS, 0.0)
 
     def command_torque(self, command, state, now: float) -> np.ndarray:
         joint_pos = np.asarray(state.joint_pos)[self.body_index]

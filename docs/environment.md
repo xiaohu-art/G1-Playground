@@ -23,7 +23,7 @@ policy pose/gains into runtime joint order, constructs the policy, then injects 
 
 ```python
 dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-policy = UnitreeWoGaitPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+policy = LeggedLabPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
 env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
 controller = instantiate(cfg.controller, env=env)
 ```
@@ -66,9 +66,8 @@ Both deployments use the same startup and loop:
 1. `self_check()` and 10 dry inference frames without writes;
 2. perform one more state/input/shutdown/tilt preflight, then activate commands;
 3. ramp measured pose to standing for 3 seconds, then reset policy history;
-4. blend into zero-command closed-loop policy control for 5 seconds;
-5. run the paced loop with shutdown and `is_upright(state.base_quat)` checks before each write;
-6. call `shutdown()` from `finally`.
+4. run the paced policy loop directly with shutdown and `is_upright(state.base_quat)` checks before each write;
+5. call `shutdown()` from `finally`.
 
 There is no simulator reset channel or `G1Env.reset()`. A tilt failure stops the client; restart the simulation processes
 instead of bypassing DDS to mutate backend state.

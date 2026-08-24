@@ -1,8 +1,8 @@
 # G1-Playground
 
 G1-Playground is a focused deployment runtime for the **Unitree G1 29DoF** and the
-`UnitreeWoGaitPolicy` locomotion checkpoint from
-[unitree_rl_lab](https://github.com/unitreerobotics/unitree_rl_lab). Simulation and hardware use the same policy loop and
+`LeggedLabPolicy` locomotion checkpoint from the
+[LeggedLab](https://github.com/Hellod035/LeggedLab) training framework. Simulation and hardware use the same policy loop and
 the same DDS-facing `G1Env`; the selected endpoint, operator input, and hardware activation requirement differ.
 
 | Hydra deployment | Controller | G1 environment | Endpoint |
@@ -19,9 +19,9 @@ native classes do not call or own each other; they only share neutral CRC and DD
 There is no direct in-process `MujocoEnv` path. Simulation is intentionally a two-process DDS system. The standalone
 server retains the repository-owned `G1MujocoBackend` physics core and always opens the official MuJoCo viewer.
 
-The policy observes and commands all 29 joints. Its 50 Hz rate, five-frame field-major history, and 480-to-29 layout are
-class-level checkpoint contracts; they are not deployment tuning fields. The checkpoint is stored at
-`assets/models/unitree/policy_wo_gait.pt`.
+The policy observes and commands all 29 joints. Its 50 Hz rate, single-frame 96-to-29 layout, and recurrent LSTM state
+are class-level checkpoint contracts; they are not deployment tuning fields. The checkpoint is stored at
+`assets/models/leggedlab/g1_policy.pt`.
 
 ## Installation
 
@@ -59,7 +59,7 @@ configs/
 ├── robot/
 │   └── g1.yaml
 ├── policy/
-│   └── unitree_wo_gait.yaml
+│   └── leggedlab_g1.yaml
 └── deployment/
     ├── sim.yaml
     └── real.yaml
@@ -80,13 +80,14 @@ Hydra passes the composed `DictConfig` directly to `scripts/pipeline.py`. Its `r
 
 1. reorders the single `cfg.policy.dof` pose and gains into robot joint order with
    `compose_dof_config(cfg.robot.dof, cfg.policy.dof)`;
-2. constructs `UnitreeWoGaitPolicy`;
+2. constructs `LeggedLabPolicy`;
 3. calls `hydra.utils.instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)`;
 4. calls `instantiate(cfg.controller, env=env)`.
 
 `robot/g1.yaml` owns the XML, G1 runtime joint order, and simulator torque limits. It has no live position-limit field.
-`policy/unitree_wo_gait.yaml` owns the checkpoint plus one policy DoF block containing joint order, standing pose, and
-tuned Kp/Kd. Frequency, history length, and observation layout stay with the policy class. `G1Env` receives one complete
+`policy/leggedlab_g1.yaml` owns the checkpoint plus one policy DoF block containing joint order, standing pose, and
+tuned Kp/Kd, together with observation scales, command ranges, and clip magnitudes. Frequency, history length, and
+observation layout stay with the policy class. `G1Env` receives one complete
 effective DoF configuration and the policy-owned period at construction; there is no later gain or period override.
 
 To inspect the resolved real configuration without constructing a runtime or connecting to the robot:
@@ -135,15 +136,15 @@ Connect an Xbox-compatible controller to command motion. The left stick controls
 horizontal movement of the right stick controls yaw. Press `A` to request software shutdown. With no local controller,
 the launcher holds every axis at zero and logs a warning; use `Ctrl+C` to stop that terminal.
 
-The server keeps elastic support enabled before the first valid LowCmd, holds full support for the 3-second standing ramp,
-then releases it over the 5-second policy blend. A valid command older than the current 0.1-second simulator timeout stops
+The server keeps elastic support enabled before the first valid LowCmd, then releases it linearly during the 3-second
+standing ramp. Support reaches zero when the locomotion policy takes direct control. A valid command older than the current 0.1-second simulator timeout stops
 the server. These are simulation defaults under evaluation, not safety-certified limits or hardware watchdogs.
 
 The simulator is a separate DDS peer outside `G1Env`; it does not load a policy or controller. The complete boundary is:
 
 ```text
 pipeline.py
-  JoystickCtrl → UnitreeWoGaitPolicy → G1Env → G1DdsControlEndpoint
+  JoystickCtrl → LeggedLabPolicy → G1Env → G1DdsControlEndpoint
                                                                     ⇅ HG DDS
 simulate.py
   G1DdsRobotEndpoint → G1MujocoDdsServer → G1MujocoBackend → official MuJoCo viewer
@@ -169,7 +170,7 @@ python scripts/pipeline.py deployment=real env.net_if=enP8p1s0
 
 Replace `enP8p1s0` with the exact robot-facing interface. Startup first receives and validates LowState without a command
 publisher. The launcher then performs a final preflight, activates command transport, ramps from the measured pose to
-standing over 3 seconds, resets policy history, and blends into zero-command closed-loop control over 5 seconds.
+standing over 3 seconds, resets policy history, and lets the locomotion policy take direct closed-loop control.
 Simulation creates LowCmd transport without MotionSwitcher; real deployment requires MotionSwitcher availability and a
 bounded successful release before creating that transport. This path uses `G1Env`'s native `G1DdsControlEndpoint`
 directly against the physical G1; it neither constructs nor depends on the simulation-only `G1DdsRobotEndpoint`.
@@ -181,10 +182,10 @@ guarded throughout the run and press `A` for software shutdown at the first sign
 
 - `configs/run_pipeline.yaml`: Hydra policy-client defaults.
 - `configs/robot/g1.yaml`: G1 XML, runtime joint order, and simulator torque limits.
-- `configs/policy/unitree_wo_gait.yaml`: checkpoint, one policy DoF block, scales, and maximum commands.
+- `configs/policy/leggedlab_g1.yaml`: checkpoint, one policy DoF block, scales, command ranges, and clip magnitudes.
 - `configs/deployment/`: endpoint/topics, MotionSwitcher requirement, and controller target for `sim` and `real`.
 - `g1_playground/g1_env.py`: the single policy-facing G1 state/target contract and native DDS client adapter.
-- `g1_playground/policy/`: `UnitreeWoGaitPolicy` inference and observation construction.
+- `g1_playground/policy/`: `LeggedLabPolicy` inference and observation construction.
 - `g1_playground/controller/`: Xbox and Unitree remote input.
 - `g1_playground/simulation/`: retained `G1MujocoBackend`, elastic support, and the viewer-free DDS-server loop.
 - `g1_playground/utils/math.py`: pure quaternion/gravity and tilt calculations.

@@ -1,9 +1,9 @@
 defaults:
   - robot: g1
   - robot@inspire: inspire
-  - policy@loco: unitree_wo_gait
-  - policy@largebox: body_hand_distill_largebox
-  - policy@stand_track: track
+  - policy@loco: leggedlab_g1
+  - policy@hoi: body_hand_distill_largebox
+  - policy@track: track
   - motion: largebox_037_v02
   - deployment: sim
   - override hydra/job_logging: disabled
@@ -14,12 +14,10 @@ device: cpu
 
 startup:
   ramp_seconds: 3.0
-  blend_seconds: 5.0
 
 handover:
-  to_largebox_seconds: 2.0
-  to_standing_seconds: 5.0
-  body_rate_limit: 0.05
+  to_hoi_seconds: 2.0
+  to_default_seconds: 5.0
 
 recording:
   enabled: true

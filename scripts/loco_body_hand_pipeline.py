@@ -11,6 +11,7 @@ import sys
 import termios
 import time
 import tty
+from enum import Enum, auto
 from types import SimpleNamespace
 
 import g1_playground  # noqa: F401
@@ -22,7 +23,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from g1_playground.inspire.hand_env import InspireHandEnv
-from g1_playground.policy import UnitreeWoGaitPolicy
+from g1_playground.policy import LeggedLabPolicy
 from g1_playground.policy.body_hand import BodyHandPolicy
 from g1_playground.policy.track import TrackPolicy
 from g1_playground.utils.dof import compose_dof_config
@@ -31,21 +32,18 @@ from g1_playground.utils.math import is_upright, quat_angular_velocity, quat_sle
 from g1_playground.utils.recorder import record, recorder, save_recording
 
 logger = logging.getLogger("g1_playground")
-SWITCH_KEY = b"]"
+LOCO_TO_TRACK_KEY = b"["
+TRACK_TO_HOI_KEY = b"]"
 WARMUP_STEPS = 3
 ZERO_CONTROL = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0}}
 IDLE_CONTROL = {"axes": {}}
-PHASES = (
-    "ramp",
-    "blend",
-    "locomotion",
-    "to_largebox",
-    "largebox",
-    "to_standing",
-    "stand_track",
-)
-LARGEBOX_PHASES = ("to_largebox", "largebox")
-STANDING_PHASES = ("to_standing", "stand_track")
+PHASES = ("ramp", "locomotion", "track", "track_to_hoi", "hoi", "track_to_default")
+
+
+class Mode(Enum):
+    LOCOMOTION = auto()
+    TRACK = auto()
+    HOI = auto()
 
 
 class Stop(RuntimeError):
@@ -54,31 +52,29 @@ class Stop(RuntimeError):
 
 def open_key_reader():
     if not sys.stdin.isatty():
-        logger.warning("stdin is not a terminal; the %r switch key is disabled", SWITCH_KEY.decode())
+        logger.warning("stdin is not a terminal; the '[' and ']' switch keys are disabled")
         return -1, None
     descriptor = sys.stdin.fileno()
     saved = termios.tcgetattr(descriptor)
     tty.setcbreak(descriptor)
-    logger.warning("Terminal echo is off; press %r to hand over to the tracking policy", SWITCH_KEY.decode())
+    logger.warning("Terminal echo is off; press '[' for Locomotion -> Track, then ']' for Track -> HOI")
     return descriptor, saved
 
 
-def poll_switch_key(descriptor: int):
-    pressed = False
+def poll_keys(descriptor: int):
+    pressed = set()
     while descriptor >= 0 and select.select([descriptor], [], [], 0.0)[0]:
         chunk = os.read(descriptor, 256)
         if not chunk:
-            logger.warning("Standard input closed; the switch key is no longer available")
+            logger.warning("Standard input closed; the switch keys are no longer available")
             return pressed, -1
-        pressed = pressed or SWITCH_KEY in chunk
+        for key in (LOCO_TO_TRACK_KEY, TRACK_TO_HOI_KEY):
+            if key in chunk:
+                pressed.add(key)
     return pressed, descriptor
 
 
-def anchor_quat(state) -> np.ndarray:
-    return np.asarray(state.base_quat, dtype=np.float32)[[3, 0, 1, 2]]
-
-
-def eased(progress: float) -> float:
+def smoothstep(progress: float) -> float:
     return float(progress * progress * (3.0 - 2.0 * progress))
 
 
@@ -94,31 +90,6 @@ def read_frame(run):
     return state, hand_state, odometry, control
 
 
-def require_largebox_inputs(hand_state, odometry) -> None:
-    if odometry is None:
-        raise Stop("Odometry is unavailable; the largebox reference cannot be anchored")
-    if hand_state.stale:
-        raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
-
-
-def largebox_command(run, frame, state, hand_state, odometry):
-    observation = run.largebox.get_observation(frame, odometry.position, anchor_quat(state), state, hand_state)
-    return run.largebox.act(observation)
-
-
-def rate_limited(previous, desired, limit):
-    return previous + np.clip(desired - previous, -limit, limit)
-
-
-def commit(run, phase, frame, state, hand_state, odometry, body_target, hand_target) -> None:
-    run.env.step(body_target)
-    run.hand_env.step(hand_target)
-    record_frame(run, phase, frame, state, hand_state, odometry, body_target, hand_target)
-    remaining = run.dt - (time.monotonic() - run.started)
-    if remaining > 0:
-        time.sleep(remaining)
-
-
 def record_frame(run, phase, frame, state, hand_state, odometry, body_target, hand_target) -> None:
     log = run.log
     if log is None or log.count >= log.phase.shape[0]:
@@ -128,55 +99,57 @@ def record_frame(run, phase, frame, state, hand_state, odometry, body_target, ha
     log.motion_frame[index] = -1 if frame is None else frame
     log.hand_pos[index] = hand_state.joint_pos
     log.hand_target[index] = hand_target
-    if phase in LARGEBOX_PHASES:
-        log.largebox_action[index] = run.largebox.last_action
-    elif phase in STANDING_PHASES:
-        log.stand_action[index] = run.stand_track.last_action
     record(log, run.started - run.origin, state, body_target, odometry, run.env)
+
+
+def step_envs(run, phase, frame, state, hand_state, odometry, body_target, hand_target) -> None:
+    run.env.step(body_target)
+    run.hand_env.step(hand_target)
+    record_frame(run, phase, frame, state, hand_state, odometry, body_target, hand_target)
+    remaining = run.dt - (time.monotonic() - run.started)
+    if remaining > 0:
+        time.sleep(remaining)
 
 
 def warm_up_policies(run) -> None:
     state = run.env.read()
-    largebox_observation = np.zeros(run.largebox.observation_dim, dtype=np.float32)
-
-    loco_times = []
-    largebox_times = []
-    stand_times = []
+    hoi_observation = np.zeros(run.hoi.observation_dim, dtype=np.float32)
+    timings = {"loco": [], "hoi": [], "track": []}
 
     for _ in range(WARMUP_STEPS):
         started = time.perf_counter()
         run.loco.act(state, ZERO_CONTROL)
-        loco_times.append(time.perf_counter() - started)
+        timings["loco"].append(time.perf_counter() - started)
 
         started = time.perf_counter()
-        run.largebox.act(largebox_observation)
-        largebox_times.append(time.perf_counter() - started)
+        run.hoi.act(hoi_observation)
+        timings["hoi"].append(time.perf_counter() - started)
 
         started = time.perf_counter()
-        run.stand_track.act(state, IDLE_CONTROL)
-        stand_times.append(time.perf_counter() - started)
+        run.track.act(state, IDLE_CONTROL)
+        timings["track"].append(time.perf_counter() - started)
 
     run.loco.reset()
-    run.largebox.reset()
-    run.stand_track.reset()
+    run.hoi.reset()
+    run.track.reset()
 
     logger.info(
-        "Policy warm-up complete: loco %.1f -> %.1f ms, largebox %.1f -> %.1f ms, stand_track %.1f -> %.1f ms",
-        loco_times[0] * 1000,
-        loco_times[-1] * 1000,
-        largebox_times[0] * 1000,
-        largebox_times[-1] * 1000,
-        stand_times[0] * 1000,
-        stand_times[-1] * 1000,
+        "Policy warm-up complete: loco %.1f -> %.1f ms, HOI %.1f -> %.1f ms, track %.1f -> %.1f ms",
+        timings["loco"][0] * 1000,
+        timings["loco"][-1] * 1000,
+        timings["hoi"][0] * 1000,
+        timings["hoi"][-1] * 1000,
+        timings["track"][0] * 1000,
+        timings["track"][-1] * 1000,
     )
 
 
-def startup_locomotion(run, ramp_steps, blend_steps):
+def startup_locomotion(run, ramp_steps):
     run.started = time.monotonic()
-    state, hand_state, odometry, _ = read_frame(run)
+    state, hand_state, _, _ = read_frame(run)
     measured_body = np.asarray(state.dof_pos, dtype=np.float64)
     hand_command = np.asarray(hand_state.joint_pos, dtype=np.float64)
-    standing = run.loco.standing_target
+    standing_target = run.loco.standing_target
 
     run.env.activate_commands()
     run.origin = time.monotonic()
@@ -185,195 +158,255 @@ def startup_locomotion(run, ramp_steps, blend_steps):
         run.started = time.monotonic()
         state, hand_state, odometry, _ = read_frame(run)
         alpha = (index + 1) / ramp_steps
-        body_command = (1.0 - alpha) * measured_body + alpha * standing
-        commit(run, "ramp", None, state, hand_state, odometry, body_command, hand_command)
+        body_command = (1.0 - alpha) * measured_body + alpha * standing_target
+        step_envs(run, "ramp", None, state, hand_state, odometry, body_command, hand_command)
 
     run.loco.reset()
-    logger.warning("Blending into closed-loop locomotion over %.1f seconds", blend_steps * run.dt)
-    body_command = standing
-    for index in range(blend_steps):
-        run.started = time.monotonic()
-        state, hand_state, odometry, _ = read_frame(run)
-        alpha = (index + 1) / blend_steps
-        body_command = (1.0 - alpha) * standing + alpha * run.loco.act(state, ZERO_CONTROL)
-        commit(run, "blend", None, state, hand_state, odometry, body_command, hand_command)
-    return body_command, hand_command
+    return standing_target, hand_command
 
 
-def run_locomotion_until_switch(run, body_command, hand_command):
-    logger.warning("Locomotion is live; drive with the controller and press %r when parked", SWITCH_KEY.decode())
-    descriptor = run.key_descriptor
-    while True:
-        run.started = time.monotonic()
-        state, hand_state, odometry, control = read_frame(run)
-        requested, descriptor = poll_switch_key(descriptor)
-        run.key_descriptor = descriptor
-        if requested:
-            return body_command, hand_command, state, hand_state, odometry
-        body_command = run.loco.act(state, control)
-        commit(run, "locomotion", None, state, hand_state, odometry, body_command, hand_command)
+def apply_track_reference(run, reference, joint_vel, previous_anchor=None):
+    anchor_pos, anchor_orientation = run.track.observation.anchor_pose(
+        np.array([0.0, 0.0, reference.root_height], dtype=np.float32),
+        reference.root_quat,
+        reference.joint_pos,
+    )
+    if previous_anchor is None:
+        anchor_lin_vel_w = np.zeros(3, dtype=np.float32)
+        anchor_ang_vel_w = np.zeros(3, dtype=np.float32)
+    else:
+        anchor_lin_vel_w = (anchor_pos - previous_anchor[0]) / run.dt
+        anchor_ang_vel_w = quat_angular_velocity(previous_anchor[1], anchor_orientation, run.dt)
+    run.track.set_reference(
+        root_height=reference.root_height,
+        root_quat=reference.root_quat,
+        joint_pos=reference.joint_pos,
+        joint_vel=joint_vel,
+        anchor_lin_vel_w=anchor_lin_vel_w,
+        anchor_ang_vel_w=anchor_ang_vel_w,
+    )
+    reference.anchor = (anchor_pos, anchor_orientation)
+    return reference
 
 
-def capture_largebox_origin(run, state, hand_state, odometry):
-    require_largebox_inputs(hand_state, odometry)
+def enter_track(run, machine, state, odometry):
+    if odometry is None:
+        raise Stop("Odometry is unavailable; cannot capture the Track origin")
     logger.warning(
         "Capturing the track origin at raw odometry xy=%s, body height %.3f m",
         np.asarray(odometry.raw_position)[:2],
         odometry.body_height,
     )
     run.env.set_born_place(state.base_quat, odometry.raw_position)
-    run.largebox.motion.align()
-    run.largebox.reset()
+    run.hoi.motion.align()
+    run.env.set_gains(run.hoi_stiffness, run.hoi_damping)
 
     state = run.env.read()
     odometry = run.env.read_odometry()
-    require_largebox_inputs(hand_state, odometry)
+    if odometry is None:
+        raise Stop("Odometry is unavailable after rebase")
+
+    run.track.reset()
+    machine.track_reference = apply_track_reference(
+        run,
+        SimpleNamespace(
+            root_height=float(odometry.position[2]),
+            root_quat=np.asarray(state.base_quat, dtype=np.float32)[[3, 0, 1, 2]],
+            joint_pos=np.asarray(state.dof_pos, dtype=np.float32).copy(),
+            hand_pos=machine.hand_command.copy(),
+        ),
+        np.zeros(29, dtype=np.float32),
+    )
+    machine.mode = Mode.TRACK
+    machine.track_goal = None
+    machine.transition = None
     logger.warning(
-        "Rebased: local xy=%s, body height %.3f m, reference frame 0 at xy=%s",
+        "Track holds the live reference at local xy=%s and body height %.3f m; press ']' to start HOI",
         np.asarray(odometry.position)[:2],
         float(odometry.position[2]),
-        run.largebox.motion.anchor_pos[0][:2],
     )
     return state, odometry
 
 
-def blend_to_largebox(run, steps, hand_command):
-    run.env.set_gains(run.largebox_stiffness, run.largebox_damping)
-    logger.warning("Switched to the largebox gains; crossfading over %.1f seconds", steps * run.dt)
-    initial_hand = np.asarray(hand_command, dtype=np.float64)
-    for index in range(steps):
-        run.started = time.monotonic()
-        state, hand_state, odometry, _ = read_frame(run)
-        require_largebox_inputs(hand_state, odometry)
-        largebox_body, largebox_hand = largebox_command(run, 0, state, hand_state, odometry)
-        loco_body = run.loco.act(state, ZERO_CONTROL)
-        alpha = eased((index + 1) / steps)
-        body_command = (1.0 - alpha) * loco_body + alpha * largebox_body
-        hand_command = (1.0 - alpha) * initial_hand + alpha * largebox_hand
-        commit(run, "to_largebox", 0, state, hand_state, odometry, body_command, hand_command)
-    return body_command, hand_command
+def step_track_transition(run, machine):
+    transition = machine.transition
+    transition.step += 1
+    progress = transition.step / transition.steps
+    alpha = smoothstep(progress)
+    alpha_rate = 6.0 * progress * (1.0 - progress) / (transition.steps * run.dt)
+    start, target = transition.start, transition.target
 
-
-def run_largebox_motion(run):
-    frames = run.largebox.motion.num_frames
-    logger.warning("Running all %d reference frames once (%.2f s)", frames, frames * run.dt)
-    for frame in range(frames):
-        run.started = time.monotonic()
-        state, hand_state, odometry, _ = read_frame(run)
-        require_largebox_inputs(hand_state, odometry)
-        body_command, hand_command = largebox_command(run, frame, state, hand_state, odometry)
-        commit(run, "largebox", frame, state, hand_state, odometry, body_command, hand_command)
-    return body_command, hand_command
-
-
-def reference_anchor_pose(run, root_height, root_quat, joint_pos):
-    return run.stand_track.observation.anchor_pose(
-        np.array([0.0, 0.0, float(root_height)], dtype=np.float32),
-        np.asarray(root_quat, dtype=np.float32).reshape(4),
-        np.asarray(joint_pos, dtype=np.float32).reshape(-1),
+    reference = SimpleNamespace(
+        root_height=(1.0 - alpha) * start.root_height + alpha * target.root_height,
+        root_quat=quat_slerp(start.root_quat, target.root_quat, alpha),
+        joint_pos=(1.0 - alpha) * start.joint_pos + alpha * target.joint_pos,
+        hand_pos=(1.0 - alpha) * start.hand_pos + alpha * target.hand_pos,
     )
-
-
-def apply_reference(run, root_height, root_quat, joint_pos, joint_vel, previous):
-    anchor_pos, anchor_quat = reference_anchor_pose(run, root_height, root_quat, joint_pos)
-    if previous is None:
-        anchor_lin_vel_w = np.zeros(3, dtype=np.float32)
-        anchor_ang_vel_w = np.zeros(3, dtype=np.float32)
-    else:
-        anchor_lin_vel_w = (anchor_pos - previous[0]) / run.dt
-        anchor_ang_vel_w = quat_angular_velocity(previous[1], anchor_quat, run.dt)
-    run.stand_track.set_reference(
-        root_height=root_height,
-        root_quat=root_quat,
-        joint_pos=joint_pos,
-        joint_vel=joint_vel,
-        anchor_lin_vel_w=anchor_lin_vel_w,
-        anchor_ang_vel_w=anchor_ang_vel_w,
+    machine.track_reference = apply_track_reference(
+        run,
+        reference,
+        alpha_rate * (target.joint_pos - start.joint_pos),
+        machine.track_reference.anchor,
     )
-    return anchor_pos, anchor_quat
+    machine.hand_command = reference.hand_pos
+    return transition.step == transition.steps
 
 
-def capture_standing_reference(run, state, odometry):
-    measured_body = np.asarray(state.dof_pos, dtype=np.float64).copy()
-    run.stand_track.reset()
-    run.stand_track.accept_applied_target(measured_body)
-    start = SimpleNamespace(
-        joint_pos=measured_body.astype(np.float32),
-        root_quat=anchor_quat(state),
-        root_height=float(odometry.position[2]),
+def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps):
+    machine = SimpleNamespace(
+        mode=Mode.LOCOMOTION,
+        track_goal=None,
+        transition=None,
+        track_reference=None,
+        motion_frame=0,
+        body_command=np.asarray(body_command, dtype=np.float64),
+        hand_command=np.asarray(hand_command, dtype=np.float64),
+        to_hoi_steps=to_hoi_steps,
+        to_default_steps=to_default_steps,
     )
-    start.anchor = apply_reference(
-        run, start.root_height, start.root_quat, start.joint_pos, np.zeros(29, dtype=np.float32), None
-    )
-    logger.warning(
-        "Standing reference captured live: root height %.3f m, %.2f rad from the default pose",
-        start.root_height,
-        float(np.abs(start.joint_pos - run.stand_track.standing_target).max()),
-    )
-    return start, measured_body
+    run.machine = machine
+    logger.warning("Locomotion is live; press '[' when parked to hand control to Track")
 
-
-def track_to_standing(run, steps, body_command, hand_command, start):
-    default_pos = np.asarray(run.stand_track.standing_target, dtype=np.float32)
-    target_height = float(run.stand_track.reference_root_height)
-    target_quat = yaw_quat(start.root_quat)
-    duration = steps * run.dt
-    logger.warning(
-        "Walking the standing reference to the default pose over %.1f seconds (%.2f rad, %+.3f m)",
-        duration,
-        float(np.abs(default_pos - start.joint_pos).max()),
-        target_height - start.root_height,
-    )
-    previous = start.anchor
-    for index in range(steps):
-        run.started = time.monotonic()
-        state, hand_state, odometry, _ = read_frame(run)
-
-        progress = (index + 1) / steps
-        alpha = eased(progress)
-        alpha_rate = 6.0 * progress * (1.0 - progress) / duration
-        previous = apply_reference(
-            run,
-            (1.0 - alpha) * start.root_height + alpha * target_height,
-            quat_slerp(start.root_quat, target_quat, alpha),
-            (1.0 - alpha) * start.joint_pos + alpha * default_pos,
-            alpha_rate * (default_pos - start.joint_pos),
-            previous,
-        )
-
-        policy_target = run.stand_track.act(state, IDLE_CONTROL)
-        body_command = rate_limited(body_command, policy_target, run.body_rate_limit)
-        run.stand_track.accept_applied_target(body_command)
-        commit(run, "to_standing", None, state, hand_state, odometry, body_command, hand_command)
-
-    apply_reference(run, target_height, target_quat, default_pos, np.zeros(29, dtype=np.float32), None)
-    return body_command, hand_command
-
-
-def hold_stand_track(run, body_command, hand_command):
-    logger.warning("Standing tracker holds the default reference; press the shutdown button to finish")
     while True:
         run.started = time.monotonic()
-        state, hand_state, odometry, _ = read_frame(run)
-        policy_target = run.stand_track.act(state, IDLE_CONTROL)
-        body_command = rate_limited(body_command, policy_target, run.body_rate_limit)
-        run.stand_track.accept_applied_target(body_command)
-        commit(run, "stand_track", None, state, hand_state, odometry, body_command, hand_command)
+        state, hand_state, odometry, control = read_frame(run)
+        keys, run.key_descriptor = poll_keys(run.key_descriptor)
+        frame = None
+
+        match machine.mode:
+            case Mode.LOCOMOTION:
+                if LOCO_TO_TRACK_KEY in keys:
+                    state, odometry = enter_track(run, machine, state, odometry)
+                    machine.body_command = run.track.act(state, IDLE_CONTROL)
+                    phase = "track"
+                else:
+                    machine.body_command = run.loco.act(state, control)
+                    phase = "locomotion"
+
+            case Mode.TRACK:
+                if machine.track_goal == "default" and machine.transition is None:
+                    if odometry is None:
+                        raise Stop("Odometry is unavailable; the live Track reference cannot be captured")
+                    run.track.reset()
+                    machine.track_reference = apply_track_reference(
+                        run,
+                        SimpleNamespace(
+                            root_height=float(odometry.position[2]),
+                            root_quat=np.asarray(state.base_quat, dtype=np.float32)[[3, 0, 1, 2]],
+                            joint_pos=np.asarray(state.dof_pos, dtype=np.float32).copy(),
+                            hand_pos=machine.hand_command.copy(),
+                        ),
+                        np.zeros(29, dtype=np.float32),
+                    )
+                    target = SimpleNamespace(
+                        root_height=float(run.track.reference_root_height),
+                        root_quat=yaw_quat(machine.track_reference.root_quat),
+                        joint_pos=np.asarray(run.track.standing_target, dtype=np.float32),
+                        hand_pos=machine.track_reference.hand_pos.copy(),
+                    )
+                    machine.transition = SimpleNamespace(
+                        start=machine.track_reference,
+                        target=target,
+                        steps=machine.to_default_steps,
+                        step=0,
+                    )
+                    logger.warning(
+                        "HOI finished; Track is moving the live reference to the default pose over %.1f seconds "
+                        "(%.2f rad, %+.3f m)",
+                        machine.to_default_steps * run.dt,
+                        float(np.abs(target.joint_pos - machine.track_reference.joint_pos).max()),
+                        target.root_height - machine.track_reference.root_height,
+                    )
+                elif TRACK_TO_HOI_KEY in keys and machine.track_goal is None and machine.motion_frame == 0:
+                    target_body, target_hand = run.hoi.reference_targets()
+                    machine.track_goal = "hoi"
+                    machine.transition = SimpleNamespace(
+                        start=machine.track_reference,
+                        target=SimpleNamespace(
+                            root_height=float(run.hoi.motion.anchor_pos[0, 2]),
+                            root_quat=np.asarray(run.hoi.motion.anchor_quat[0], dtype=np.float32),
+                            joint_pos=np.asarray(target_body, dtype=np.float32),
+                            hand_pos=np.asarray(target_hand, dtype=np.float64),
+                        ),
+                        steps=machine.to_hoi_steps,
+                        step=0,
+                    )
+                    logger.warning(
+                        "Track is moving its reference to HOI frame 0 over %.1f seconds",
+                        machine.to_hoi_steps * run.dt,
+                    )
+
+                if machine.track_goal == "hoi" and hand_state.stale:
+                    raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
+
+                goal = machine.track_goal
+                finished = machine.transition is not None and step_track_transition(run, machine)
+                machine.body_command = run.track.act(state, IDLE_CONTROL)
+                phase = "track" if goal is None else f"track_to_{goal}"
+                if finished:
+                    target = machine.transition.target
+                    machine.track_reference = apply_track_reference(
+                        run,
+                        target,
+                        np.zeros_like(target.joint_pos),
+                    )
+                    machine.hand_command = target.hand_pos
+                    machine.track_goal = None
+                    machine.transition = None
+                    if goal == "hoi":
+                        run.hoi.reset()
+                        machine.motion_frame = 0
+                        machine.mode = Mode.HOI
+                        logger.warning("Running all %d HOI reference frames once", run.hoi.motion.num_frames)
+                    else:
+                        logger.warning("Track holds the default reference; press the shutdown button to finish")
+
+            case Mode.HOI:
+                frame = machine.motion_frame
+                if odometry is None:
+                    raise Stop("Odometry is unavailable during HOI")
+                if hand_state.stale:
+                    raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
+                base_quat_wxyz = np.asarray(state.base_quat, dtype=np.float32)[[3, 0, 1, 2]]
+                observation = run.hoi.get_observation(frame, odometry.position, base_quat_wxyz, state, hand_state)
+                body_target, hand_target = run.hoi.act(observation)
+                if frame == 0:
+                    logger.warning(
+                        "Track-to-HOI first command step: %.3f rad max",
+                        float(np.max(np.abs(body_target - machine.body_command))),
+                    )
+                machine.body_command = body_target
+                machine.hand_command = hand_target
+                machine.motion_frame += 1
+                phase = "hoi"
+                if machine.motion_frame == run.hoi.motion.num_frames:
+                    machine.mode = Mode.TRACK
+                    machine.track_goal = "default"
+                    machine.transition = None
+
+        step_envs(
+            run,
+            phase,
+            frame,
+            state,
+            hand_state,
+            odometry,
+            machine.body_command,
+            machine.hand_command,
+        )
 
 
-def build_log(capacity, largebox, stand_track, hand_dofs):
+def build_log(capacity, hand_dofs):
     log = recorder(capacity)
     log.phase = np.full(capacity, -1, dtype=np.int8)
     log.motion_frame = np.full(capacity, -1, dtype=np.int32)
     log.hand_pos = np.full((capacity, hand_dofs), np.nan, dtype=np.float32)
     log.hand_target = np.full((capacity, hand_dofs), np.nan, dtype=np.float32)
-    log.largebox_action = np.full((capacity, largebox.action_dim), np.nan, dtype=np.float32)
-    log.stand_action = np.full((capacity, stand_track.standing_target.shape[0]), np.nan, dtype=np.float32)
     log.phase_names = np.asarray(PHASES, dtype="<U16")
     return log
 
 
-@hydra.main(version_base=None, config_path="../configs", config_name="run_loco_largebox_track")
+@hydra.main(version_base=None, config_path="../configs", config_name="run_loco_hoi_track")
 def run(cfg: DictConfig) -> None:
     setup_logger()
     torch.set_num_threads(1)
@@ -383,76 +416,55 @@ def run(cfg: DictConfig) -> None:
     saved_terminal = None
     try:
         loco_dof = compose_dof_config(cfg.robot.dof, cfg.loco.dof)
-        stand_dof = compose_dof_config(cfg.robot.dof, cfg.stand_track.dof)
-        loco = UnitreeWoGaitPolicy(cfg.loco, device=cfg.device, dof_cfg=loco_dof)
-        largebox = BodyHandPolicy(
-            cfg.largebox,
+        track_dof = compose_dof_config(cfg.robot.dof, cfg.track.dof)
+        loco = LeggedLabPolicy(cfg.loco, device=cfg.device, dof_cfg=loco_dof)
+        hoi = BodyHandPolicy(
+            cfg.hoi,
             cfg.motion,
             device=cfg.device,
             runtime_body_joint_names=cfg.robot.dof.joint_names,
             runtime_hand_joint_names=cfg.inspire.dof.joint_names,
             hand_mimic=cfg.inspire.mimic,
         )
-        stand_track = TrackPolicy(cfg.stand_track, device=cfg.device, dof_cfg=stand_dof)
-        if not loco.freq == largebox.freq == stand_track.freq:
-            raise RuntimeError(
-                f"All policies must run at one rate: loco {loco.freq} Hz, largebox {largebox.freq} Hz, "
-                f"stand_track {stand_track.freq} Hz"
-            )
+        track = TrackPolicy(cfg.track, device=cfg.device, dof_cfg=track_dof)
 
         env = instantiate(cfg.env, dof_cfg=loco_dof, control_dt=loco.dt)
         hand_env = InspireHandEnv(dof_cfg=cfg.inspire.dof, domain_id=cfg.env.domain_id, net_if=cfg.env.net_if)
         controller = instantiate(cfg.controller, env=env)
 
-        body_control = cfg.largebox.action.body.control
+        body_control = cfg.hoi.action.body.control
         run = SimpleNamespace(
             env=env,
             hand_env=hand_env,
             controller=controller,
             loco=loco,
-            largebox=largebox,
-            stand_track=stand_track,
+            hoi=hoi,
+            track=track,
             dt=loco.dt,
             log=None,
             started=0.0,
             origin=0.0,
             key_descriptor=-1,
-            body_rate_limit=float(cfg.handover.body_rate_limit),
-            largebox_stiffness=largebox.body_to_runtime.fit(body_control.stiffness),
-            largebox_damping=largebox.body_to_runtime.fit(body_control.damping),
+            hoi_stiffness=hoi.body_to_runtime.fit(body_control.stiffness),
+            hoi_damping=hoi.body_to_runtime.fit(body_control.damping),
         )
         if cfg.recording.enabled:
-            log = build_log(int(cfg.recording.seconds * loco.freq), largebox, stand_track, hand_env.num_dofs)
+            log = build_log(int(cfg.recording.seconds * loco.freq), hand_env.num_dofs)
             run.log = log
 
         env.self_check()
         hand_env.self_check()
-
         warm_up_policies(run)
-
         run.key_descriptor, saved_terminal = open_key_reader()
 
-        ramp_steps = int(cfg.startup.ramp_seconds * loco.freq)
-        blend_steps = int(cfg.startup.blend_seconds * loco.freq)
-        to_largebox_steps = int(cfg.handover.to_largebox_seconds * loco.freq)
-        to_standing_steps = int(cfg.handover.to_standing_seconds * loco.freq)
-
-        body_command, hand_command = startup_locomotion(run, ramp_steps, blend_steps)
-        body_command, hand_command, state, hand_state, odometry = run_locomotion_until_switch(
-            run, body_command, hand_command
+        body_command, hand_command = startup_locomotion(run, int(cfg.startup.ramp_seconds * loco.freq))
+        run_pipeline(
+            run,
+            body_command,
+            hand_command,
+            int(cfg.handover.to_hoi_seconds * loco.freq),
+            int(cfg.handover.to_default_seconds * loco.freq),
         )
-        state, odometry = capture_largebox_origin(run, state, hand_state, odometry)
-        body_command, hand_command = blend_to_largebox(run, to_largebox_steps, hand_command)
-        body_command, hand_command = run_largebox_motion(run)
-        state, hand_state, odometry, _ = read_frame(run)
-        require_largebox_inputs(hand_state, odometry)
-        logger.warning(
-            "Dropping the largebox target: it sits %.2f rad from the measured pose",
-            float(np.abs(np.asarray(body_command, dtype=np.float64) - np.asarray(state.dof_pos)).max()),
-        )
-        start, body_command = capture_standing_reference(run, state, odometry)
-        body_command, hand_command = track_to_standing(run, to_standing_steps, body_command, hand_command, start)
-        hold_stand_track(run, body_command, hand_command)
     except Stop as stopped:
         logger.critical("Stopping: %s", stopped)
     except KeyboardInterrupt:
