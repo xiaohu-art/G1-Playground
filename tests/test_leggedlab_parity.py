@@ -17,6 +17,7 @@ from omegaconf import OmegaConf
 from g1_playground.policy.leggedlab import LeggedLabPolicy
 from g1_playground.utils.dof import compose_dof_config
 from tests.config_helpers import compose_config
+from tests.runner_helpers import leggedlab_runner
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "configs"
 
@@ -171,7 +172,7 @@ def gravity_from_quat_wxyz(quat_wxyz: np.ndarray) -> np.ndarray:
 def build_policy():
     cfg = compose_config("sim")
     effective_dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-    return cfg, effective_dof, LeggedLabPolicy(cfg.policy, device="cpu", dof_cfg=effective_dof)
+    return cfg, effective_dof, LeggedLabPolicy(cfg.policy, dof_cfg=effective_dof, runner=leggedlab_runner())
 
 
 class TestLeggedLabParity(unittest.TestCase):

@@ -449,7 +449,7 @@ class TestConfiguration(unittest.TestCase):
 
     def test_the_run_root_uses_policy_roles_not_task_names(self):
         root = OmegaConf.load(CONFIG_DIR / "run_loco_hoi_track.yaml")
-        self.assertEqual(set(root), {"defaults", "device", "startup", "handover", "recording", "env", "hydra"})
+        self.assertEqual(set(root), {"defaults", "startup", "handover", "recording", "env", "hydra"})
         self.assertEqual(set(root.startup), {"ramp_seconds"})
         self.assertEqual(set(root.handover), {"to_hoi_seconds", "to_default_seconds"})
         defaults = [str(item) for item in root.defaults]

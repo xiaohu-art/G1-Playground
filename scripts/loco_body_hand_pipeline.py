@@ -18,7 +18,6 @@ import g1_playground  # noqa: F401
 
 import hydra
 import numpy as np
-import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
@@ -409,7 +408,6 @@ def build_log(capacity, hand_dofs):
 @hydra.main(version_base=None, config_path="../configs", config_name="run_loco_hoi_track")
 def run(cfg: DictConfig) -> None:
     setup_logger()
-    torch.set_num_threads(1)
     env = None
     hand_env = None
     log = None
@@ -417,16 +415,15 @@ def run(cfg: DictConfig) -> None:
     try:
         loco_dof = compose_dof_config(cfg.robot.dof, cfg.loco.dof)
         track_dof = compose_dof_config(cfg.robot.dof, cfg.track.dof)
-        loco = LeggedLabPolicy(cfg.loco, device=cfg.device, dof_cfg=loco_dof)
+        loco = LeggedLabPolicy(cfg.loco, dof_cfg=loco_dof)
         hoi = BodyHandPolicy(
             cfg.hoi,
             cfg.motion,
-            device=cfg.device,
             runtime_body_joint_names=cfg.robot.dof.joint_names,
             runtime_hand_joint_names=cfg.inspire.dof.joint_names,
             hand_mimic=cfg.inspire.mimic,
         )
-        track = TrackPolicy(cfg.track, device=cfg.device, dof_cfg=track_dof)
+        track = TrackPolicy(cfg.track, dof_cfg=track_dof)
 
         env = instantiate(cfg.env, dof_cfg=loco_dof, control_dt=loco.dt)
         hand_env = InspireHandEnv(dof_cfg=cfg.inspire.dof, domain_id=cfg.env.domain_id, net_if=cfg.env.net_if)

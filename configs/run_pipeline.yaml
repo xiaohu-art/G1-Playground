@@ -6,8 +6,6 @@ defaults:
   - override hydra/hydra_logging: disabled
   - _self_
 
-device: cpu
-
 recording:
   enabled: false
   seconds: 1200

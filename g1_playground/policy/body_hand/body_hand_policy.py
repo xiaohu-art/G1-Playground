@@ -1,10 +1,10 @@
 import logging
 
 import numpy as np
-import onnxruntime as ort
 from omegaconf import DictConfig
 
 from g1_playground.policy.body_hand.observation import BodyHandObservation, JointAssembler, ReferenceMotion
+from g1_playground.policy.tensorrt_runner import TensorRTRunner
 from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import DoFAdapter
 
@@ -17,15 +17,12 @@ class BodyHandPolicy:
         cfg_policy: DictConfig,
         cfg_motion: DictConfig,
         *,
-        device: str,
         runtime_body_joint_names,
         runtime_hand_joint_names,
         hand_mimic,
+        runner=None,
     ):
-        providers = ["CPUExecutionProvider"]
-        if str(device).lower().startswith("cuda") and "CUDAExecutionProvider" in ort.get_available_providers():
-            providers.insert(0, "CUDAExecutionProvider")
-        self.session = ort.InferenceSession(resolve_repo_path(cfg_policy.policy_file), providers=providers)
+        self.runner = runner or TensorRTRunner(resolve_repo_path(cfg_policy.policy_file))
 
         self.freq = int(cfg_policy.frequency)
         self.dt = 1.0 / self.freq
@@ -67,10 +64,11 @@ class BodyHandPolicy:
         )
 
     def _resolve_signature(self) -> tuple[str, str, int, int]:
-        inputs, outputs = self.session.get_inputs(), self.session.get_outputs()
-        if len(inputs) != 1 or len(outputs) != 1:
-            raise ValueError("Body-hand policy requires one input and one output")
-        return inputs[0].name, outputs[0].name, int(inputs[0].shape[-1]), int(outputs[0].shape[-1])
+        if self.runner.input_names != ("obs",) or self.runner.output_names != ("actions",):
+            raise ValueError(
+                f"Body-hand policy requires obs -> actions, got {self.runner.input_names} -> {self.runner.output_names}"
+            )
+        return "obs", "actions", self.runner.shape("obs")[-1], self.runner.shape("actions")[-1]
 
     def _load_motion(self, cfg_motion, observation_joint_names, future_offsets) -> ReferenceMotion:
         motion = np.load(resolve_repo_path(cfg_motion.file), allow_pickle=False)
@@ -87,8 +85,8 @@ class BodyHandPolicy:
         )
 
     def infer(self, observation: np.ndarray) -> np.ndarray:
-        outputs = self.session.run([self._output_name], {self._obs_name: observation.reshape(1, -1)})
-        return np.asarray(outputs[0], dtype=np.float32).reshape(-1)
+        outputs = self.runner.run({self._obs_name: observation.reshape(1, -1)})
+        return np.asarray(outputs[self._output_name], dtype=np.float32).reshape(-1)
 
     def process(self, raw_action: np.ndarray) -> np.ndarray:
         raw_action = np.asarray(raw_action, dtype=np.float32).reshape(self.action_dim)

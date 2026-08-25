@@ -106,14 +106,15 @@ class TestBodyHandUsesTheSharedAdapter(unittest.TestCase):
     def test_every_body_hand_mapping_is_a_dof_adapter(self):
         from g1_playground.policy.body_hand import BodyHandPolicy
         from tests.body_hand_helpers import body_joint_names, inspire_cfg, motion_cfg, policy_cfg
+        from tests.runner_helpers import body_hand_runner
 
         policy = BodyHandPolicy(
             policy_cfg(),
             motion_cfg(),
-            device="cpu",
             runtime_body_joint_names=body_joint_names(),
             runtime_hand_joint_names=inspire_cfg().dof.joint_names,
             hand_mimic=inspire_cfg().mimic,
+            runner=body_hand_runner(),
         )
         adapters = SimpleNamespace(
             body_to_runtime=policy.body_to_runtime,

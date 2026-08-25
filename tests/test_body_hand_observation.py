@@ -11,9 +11,9 @@ from tests.body_hand_helpers import (
     hand_joint_names,
     motion_data,
     policy_data,
-    session,
     training_golden,
 )
+from tests.runner_helpers import body_hand_runner
 
 GRAVITY_W = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
@@ -139,7 +139,7 @@ class TestObservationLayout(unittest.TestCase):
         self.observation = BodyHandObservation(
             self.motion,
             self.config["observation"]["default_joint_pos"],
-            int(session().get_inputs()[0].shape[-1]),
+            body_hand_runner().shape("obs")[-1],
         )
 
     def test_the_builder_emits_the_model_input_dimension(self):
@@ -256,7 +256,7 @@ class TestGoldenParity(unittest.TestCase):
         self.observation = BodyHandObservation(
             build_motion(),
             self.config["observation"]["default_joint_pos"],
-            int(session().get_inputs()[0].shape[-1]),
+            body_hand_runner().shape("obs")[-1],
         )
 
     def test_the_reference_blocks_rebuild_from_the_staged_motion(self):

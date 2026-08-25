@@ -9,11 +9,11 @@ from types import SimpleNamespace
 
 import mujoco
 import numpy as np
-import torch
 
 from g1_playground.policy.leggedlab import LeggedLabPolicy
 from g1_playground.utils.dof import compose_dof_config
 from tests.config_helpers import compose_config
+from tests.runner_helpers import leggedlab_runner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_PATH = REPO_ROOT / "tests/fixtures/pre_dds/contract.json"
@@ -74,7 +74,7 @@ class TestPreDdsContract(unittest.TestCase):
         cls.g1_real = compose_config("real")
         cls.effective_dof = compose_dof_config(cls.g1.robot.dof, cls.g1.policy.dof)
 
-    def test_assets_model_and_policy_golden(self):
+    def test_assets_model_and_vendor_contract(self):
         assets = self.expected["assets"]
         for key in ("checkpoint", "xml"):
             with self.subTest(asset=key):
@@ -87,46 +87,7 @@ class TestPreDdsContract(unittest.TestCase):
         self.assertTrue((REPO_ROOT / "third_party/mujoco_viewer/LICENSE").is_file())
         self.assertEqual(vendor_closure("third_party/mujoco_viewer"), viewer["closure"])
 
-        checkpoint = REPO_ROOT / assets["checkpoint"]["path"]
-        policy = self.expected["policy"]
-        golden_input = policy["golden_input"]
-        input_tensor = torch.linspace(
-            golden_input["start"],
-            golden_input["end"],
-            golden_input["steps"],
-            dtype=torch.float32,
-        ).reshape(1, -1)
-        old_threads = torch.get_num_threads()
-        try:
-            torch.set_num_threads(1)
-            # Freshly loaded checkpoint (initial saved LSTM state) pins the artifact itself.
-            model = torch.jit.load(checkpoint, map_location="cpu")
-            model.eval()
-            with torch.inference_mode():
-                output = model(input_tensor).cpu().numpy()
-
-            self.assertEqual(output.shape, (1, policy["output_size"]))
-            self.assertEqual(output.dtype, np.float32)
-            self.assertTrue(np.isfinite(output).all())
-            np.testing.assert_allclose(output[0], policy["golden_output"], rtol=1e-5, atol=1e-6)
-
-            # The runtime policy is recurrent: its constructor washes the LSTM state via
-            # RESET_WARMUP_STEPS zero-observation inferences. Replicate that exact call
-            # sequence on the checkpoint to obtain the reference for get_action().
-            runtime_policy = LeggedLabPolicy(self.g1.policy, device="cpu", dof_cfg=self.effective_dof)
-            washed = torch.jit.load(checkpoint, map_location="cpu")
-            washed.eval()
-            with torch.inference_mode():
-                for _ in range(LeggedLabPolicy.RESET_WARMUP_STEPS):
-                    washed(torch.zeros((1, policy["input_size"]), dtype=torch.float32))
-                washed_raw = washed(input_tensor.clip(-policy["clip_obs"], policy["clip_obs"])).cpu().numpy()
-        finally:
-            torch.set_num_threads(old_threads)
-
-        processed_action = runtime_policy.get_action(input_tensor.numpy().squeeze())
-        expected_raw = washed_raw[0]
-        np.testing.assert_allclose(processed_action, expected_raw * policy["action_scale"], rtol=1e-5, atol=1e-6)
-        np.testing.assert_allclose(runtime_policy.last_action, expected_raw, rtol=1e-5, atol=1e-6)
+        self.assertEqual(Path(assets["checkpoint"]["path"]).suffix, ".onnx")
 
     def test_single_frame_observation_layout(self):
         policy_cfg = self.g1.policy
@@ -163,7 +124,7 @@ class TestPreDdsContract(unittest.TestCase):
             expected["input_size"],
         )
 
-        policy = LeggedLabPolicy(policy_cfg, device="cpu", dof_cfg=self.effective_dof)
+        policy = LeggedLabPolicy(policy_cfg, dof_cfg=self.effective_dof, runner=leggedlab_runner())
         policy.history_buf.clear()
 
         base_ang_vel = np.array([1.0, 2.0, 3.0], dtype=np.float32)

@@ -1,10 +1,10 @@
 import logging
 
 import numpy as np
-import onnxruntime as ort
 from omegaconf import DictConfig
 
 from g1_playground.policy.base_policy import BasePolicy
+from g1_playground.policy.tensorrt_runner import TensorRTRunner
 from g1_playground.policy.track.track_observation import TrackObservation
 from g1_playground.utils import resolve_repo_path
 
@@ -17,8 +17,8 @@ class TrackPolicy(BasePolicy):
     FREQ = 50
     OBS_DIM = 167
 
-    def __init__(self, cfg_policy: DictConfig, device: str, dof_cfg: DictConfig):
-        super().__init__(device)
+    def __init__(self, cfg_policy: DictConfig, dof_cfg: DictConfig, runner=None):
+        super().__init__()
         self.num_dofs = NUM_JOINTS
 
         self.default_pos = np.asarray(dof_cfg.default_pos)
@@ -34,13 +34,10 @@ class TrackPolicy(BasePolicy):
             raise ValueError("Track policy reference_root_height must be a plausible G1 root height")
 
         policy_file = resolve_repo_path(cfg_policy.policy_file)
-        logger.debug("Loading ONNX track policy from %s", policy_file)
-        providers = ["CPUExecutionProvider"]
-        if str(device).lower().startswith("cuda") and "CUDAExecutionProvider" in ort.get_available_providers():
-            providers.insert(0, "CUDAExecutionProvider")
-        self.session = ort.InferenceSession(policy_file, providers=providers)
+        logger.debug("Loading TensorRT track policy from %s", policy_file)
+        self.runner = runner or TensorRTRunner(policy_file)
         self._obs_name, self._history_name, self._history_length = self._resolve_signature()
-        self._output_name = self.session.get_outputs()[0].name
+        self._output_name = self.runner.output_names[0]
 
         self.observation = TrackObservation(
             resolve_repo_path(cfg_policy.fk_xml),
@@ -57,13 +54,12 @@ class TrackPolicy(BasePolicy):
         self.reset()
 
     def _resolve_signature(self) -> tuple[str, str, int]:
-        inputs = self.session.get_inputs()
-        names = [tensor.name for tensor in inputs]
-        if len(inputs) != 2 or names[1] != "obs_history":
+        names = self.runner.input_names
+        if names != ("obs", "obs_history") or self.runner.output_names != ("actions",):
             raise ValueError(f"Track policy expects 'obs' and 'obs_history' inputs, got {names}")
-        if int(inputs[0].shape[-1]) != self.OBS_DIM or int(inputs[1].shape[-1]) != self.OBS_DIM:
+        if self.runner.shape(names[0])[-1] != self.OBS_DIM or self.runner.shape(names[1])[-1] != self.OBS_DIM:
             raise ValueError(f"Track policy expects {self.OBS_DIM}D inputs, got {names}")
-        return names[0], names[1], int(inputs[1].shape[1])
+        return names[0], names[1], self.runner.shape(names[1])[1]
 
     def reset(self) -> None:
         self._last_action = np.zeros(NUM_JOINTS, dtype=np.float32)
@@ -81,11 +77,8 @@ class TrackPolicy(BasePolicy):
             self._history = np.repeat(observation[np.newaxis, np.newaxis], self._history_length, axis=1)
         else:
             self._history = np.concatenate([self._history[:, 1:], observation[np.newaxis, np.newaxis]], axis=1)
-        outputs = self.session.run(
-            [self._output_name],
-            {self._obs_name: current, self._history_name: self._history},
-        )
-        return np.asarray(outputs[0], dtype=np.float32).reshape(-1)
+        outputs = self.runner.run({self._obs_name: current, self._history_name: self._history})
+        return np.asarray(outputs[self._output_name], dtype=np.float32).reshape(-1)
 
     def get_observation(self, env_data, control_data) -> np.ndarray:
         base_quat_wxyz = np.asarray(env_data.base_quat, dtype=np.float32)[[3, 0, 1, 2]]
@@ -118,7 +111,7 @@ class TrackPolicy(BasePolicy):
     def act(self, env_data, control_data) -> np.ndarray:
         raw_action = self.get_action(self.get_observation(env_data, control_data))
         if not np.all(np.isfinite(raw_action)):
-            logger.critical("Non-finite ONNX action; holding the last commanded target")
+            logger.critical("Non-finite TensorRT action; holding the last commanded target")
             return self._last_target.copy()
 
         self._last_action = raw_action.copy()

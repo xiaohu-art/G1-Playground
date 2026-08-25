@@ -6,8 +6,7 @@ import numpy as np
 class BasePolicy(ABC):
     FREQ: int
 
-    def __init__(self, device: str = "cpu"):
-        self.device = device
+    def __init__(self):
         self.freq = self.FREQ
         self.dt = 1.0 / self.freq
 

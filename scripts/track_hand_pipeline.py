@@ -10,7 +10,7 @@ import logging
 import subprocess
 import time
 
-# Run the Jetson torch-before-numpy bootstrap before anything that can import NumPy.
+# Apply the Jetson process settings before importing the numerical stack.
 import g1_playground  # noqa: F401
 
 import hydra
@@ -160,7 +160,7 @@ def run(cfg: DictConfig) -> None:
     service = None
     try:
         dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-        policy = TrackPolicy(cfg.policy, device=cfg.device, dof_cfg=dof)
+        policy = TrackPolicy(cfg.policy, dof_cfg=dof)
         env = instantiate(cfg.env, dof_cfg=dof, control_dt=policy.dt)
         controller = instantiate(cfg.controller, env=env)
 

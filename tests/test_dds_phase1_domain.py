@@ -53,6 +53,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
             from g1_playground.policy.leggedlab import LeggedLabPolicy
             from g1_playground.utils.dof import compose_dof_config
             from tests.config_helpers import load_pipeline_launcher
+            from tests.runner_helpers import leggedlab_runner
 
             launcher = load_pipeline_launcher()
 
@@ -78,7 +79,7 @@ class TestDdsPhase1Domain(unittest.TestCase):
             assert launcher.__name__ == "g1_playground_test_pipeline"
 
             effective_dof = compose_dof_config(sim.robot.dof, sim.policy.dof)
-            policy = LeggedLabPolicy(sim.policy, device="cpu", dof_cfg=effective_dof)
+            policy = LeggedLabPolicy(sim.policy, dof_cfg=effective_dof, runner=leggedlab_runner())
             action = policy.get_action(np.zeros(96, dtype=np.float32))
             assert action.shape == (29,)
 

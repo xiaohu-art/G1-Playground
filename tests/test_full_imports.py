@@ -7,12 +7,13 @@ from hydra.errors import MissingConfigException
 from omegaconf import OmegaConf
 
 from tests.config_helpers import asset_path, compose_config
+from tests.runner_helpers import leggedlab_runner
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_DEPLOYMENTS = {"sim", "real"}
 EXPECTED_POLICIES = {"LeggedLabPolicy"}
 EXPECTED_CONTROLLERS = {"KeyboardCtrl", "UnitreeCtrl"}
-EXPECTED_CHECKPOINT = REPO_ROOT / "assets/models/leggedlab/g1_policy.pt"
+EXPECTED_CHECKPOINT = REPO_ROOT / "assets/models/leggedlab/g1_policy.onnx"
 EXPECTED_COMPONENTS = {
     "sim": (
         "g1_playground.g1_env.G1Env",
@@ -129,7 +130,7 @@ class TestFullImports(unittest.TestCase):
 
         cfg = compose_config("sim")
         effective_dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
-        policy = LeggedLabPolicy(cfg.policy, device="cpu", dof_cfg=effective_dof)
+        policy = LeggedLabPolicy(cfg.policy, dof_cfg=effective_dof, runner=leggedlab_runner())
         env_data = SimpleNamespace(
             base_quat=np.array([0.0, 0.0, 0.0, 1.0]),
             base_ang_vel=np.zeros(3),

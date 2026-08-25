@@ -1,6 +1,6 @@
 # @package policy
 
-policy_file: assets/models/leggedlab/g1_policy.pt
+policy_file: assets/models/leggedlab/g1_policy.onnx
 dof:
   joint_names:
     - left_hip_pitch_joint

@@ -3,10 +3,10 @@ from collections import deque
 from types import SimpleNamespace
 
 import numpy as np
-import torch
 from omegaconf import DictConfig
 
 from g1_playground.policy.base_policy import BasePolicy
+from g1_playground.policy.tensorrt_runner import TensorRTRunner
 from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import DoFAdapter
 from g1_playground.utils.math import get_gravity_orientation
@@ -15,14 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 class LeggedLabPolicy(BasePolicy):
-    """Locomotion policy for the LeggedLab G1 checkpoint (TorchScript, 96 -> 29).
+    """Locomotion policy for the recurrent LeggedLab G1 network (96 -> 29).
 
     Observation/action semantics mirror ``LeggedLabDeploy/deploy.py::run()`` from
     https://github.com/Hellod035/LeggedLabDeploy (BSD-3-Clause): unit observation
     scales, remote commands clipped to ``command_range`` (no deadzone), observation
-    and action clipping to +-``clip_obs``/``clip_action``. The checkpoint is
-    recurrent (single-frame observation, LSTM state kept as buffers inside the
-    module) and bakes its own input normalization into the graph.
+    and action clipping to +-``clip_obs``/``clip_action``. The exported TensorRT
+    graph takes and returns its recurrent LSTM state explicitly.
     """
 
     FREQ = 50
@@ -37,16 +36,9 @@ class LeggedLabPolicy(BasePolicy):
     )
     RESET_WARMUP_STEPS = 50
 
-    def __init__(self, cfg_policy: DictConfig, device: str, dof_cfg: DictConfig):
+    def __init__(self, cfg_policy: DictConfig, dof_cfg: DictConfig, runner=None):
         dof = cfg_policy.dof
-        if device == "auto":
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-        super().__init__(device)
-        if self.device == "cpu":
-            # The 96->256 LSTM gains nothing from intra-op parallelism, while the default
-            # thread pool adds multi-ten-millisecond scheduling tails (p99 ~25 ms measured
-            # on a busy host) that blow the 50 Hz frame budget and the DDS command watchdog.
-            torch.set_num_threads(1)
+        super().__init__()
 
         self.num_dofs = len(dof.joint_names)
         for field in ("default_pos", "stiffness", "damping"):
@@ -55,17 +47,11 @@ class LeggedLabPolicy(BasePolicy):
         self.default_pos = np.asarray(dof.default_pos)
 
         policy_file = resolve_repo_path(cfg_policy.policy_file)
-        logger.debug("Loading TorchScript policy from %s", policy_file)
-        self.model = torch.jit.load(policy_file, map_location=device)
-        # The checkpoint keeps its LSTM hidden/cell state as in-module buffers. Snapshot the
-        # saved initial state so reset() can restore it before the warm-up wash below; the
-        # zero-input response of the recurrent state does not converge within the warm-up
-        # horizon, so restoring the snapshot is the only way to make every session start
-        # from the exact state the reference LeggedLabDeploy launcher boots with.
-        self._initial_hidden_state = self.model.hidden_state.detach().clone()
-        self._initial_cell_state = self.model.cell_state.detach().clone()
+        logger.debug("Loading TensorRT locomotion policy from %s", policy_file)
+        self.runner = runner or TensorRTRunner(policy_file)
+        self._resolve_signature()
         self.action_scale = cfg_policy.action_scale
-        self.last_action = np.zeros(self.num_dofs)
+        self.last_action = np.zeros(self.num_dofs, dtype=np.float32)
 
         self.observation_adapter = DoFAdapter(dof_cfg.joint_names, dof.joint_names)
         self.action_adapter = DoFAdapter(dof.joint_names, dof_cfg.joint_names)
@@ -82,19 +68,34 @@ class LeggedLabPolicy(BasePolicy):
         self.clip_action = cfg_policy.clip_action
         self.reset()
 
+    def _resolve_signature(self) -> None:
+        expected_inputs = ("obs", "hidden_state", "cell_state")
+        expected_outputs = ("actions", "next_hidden_state", "next_cell_state")
+        if self.runner.input_names != expected_inputs or self.runner.output_names != expected_outputs:
+            raise ValueError(
+                f"LeggedLab policy requires {expected_inputs} -> {expected_outputs}, "
+                f"got {self.runner.input_names} -> {self.runner.output_names}"
+            )
+        if self.runner.shape("obs") != (1, 96) or self.runner.shape("actions") != (1, self.num_dofs):
+            raise ValueError("LeggedLab TensorRT tensor dimensions do not match the policy configuration")
+        hidden_shape = self.runner.shape("hidden_state")
+        if (
+            hidden_shape != self.runner.shape("cell_state")
+            or hidden_shape != self.runner.shape("next_hidden_state")
+            or hidden_shape != self.runner.shape("next_cell_state")
+        ):
+            raise ValueError("LeggedLab TensorRT recurrent state shapes disagree")
+        self._state_shape = hidden_shape
+
     def reset(self) -> None:
         self.last_action.fill(0.0)
         default_history = [np.zeros(dim, dtype=np.float32) for _, dim in self.HISTORY_LAYOUT]
         self.history_buf = deque([default_history] * self.HISTORY_LENGTH, maxlen=self.HISTORY_LENGTH)
-        # Restore the checkpoint's saved recurrent state, then re-run the zero-observation
-        # warm-up of the reference LeggedLabDeploy launcher. Every reset therefore lands on
-        # the identical recurrent state a fresh LeggedLabDeploy boot would control from.
-        zero_obs = torch.zeros((1, sum(dim for _, dim in self.HISTORY_LAYOUT)), dtype=torch.float32, device=self.device)
-        with torch.no_grad():
-            self.model.hidden_state.copy_(self._initial_hidden_state)
-            self.model.cell_state.copy_(self._initial_cell_state)
-            for _ in range(self.RESET_WARMUP_STEPS):
-                self.model(zero_obs)
+        self._hidden_state = np.zeros(self._state_shape, dtype=np.float32)
+        self._cell_state = np.zeros(self._state_shape, dtype=np.float32)
+        zero_obs = np.zeros((1, sum(dim for _, dim in self.HISTORY_LAYOUT)), dtype=np.float32)
+        for _ in range(self.RESET_WARMUP_STEPS):
+            self._infer(zero_obs)
 
     def get_observation(self, env_data, control_data) -> np.ndarray:
         axes = control_data["axes"]
@@ -115,15 +116,19 @@ class LeggedLabPolicy(BasePolicy):
         return np.concatenate(history_list, axis=0)
 
     def get_action(self, observation: np.ndarray) -> np.ndarray:
-        observation_tensor = torch.from_numpy(observation).unsqueeze(0).float().to(self.device)
-        observation_tensor = observation_tensor.clip(-self.clip_obs, self.clip_obs)
-        with torch.no_grad():
-            action_tensor = self.model(observation_tensor).cpu()
-
-        action = action_tensor.numpy().squeeze()
+        observation = np.asarray(observation, dtype=np.float32).reshape(1, -1)
+        action = self._infer(np.clip(observation, -self.clip_obs, self.clip_obs)).reshape(-1)
         action = np.clip(action, -self.clip_action, self.clip_action)
         self.last_action = action.copy()
         return action * self.action_scale
+
+    def _infer(self, observation: np.ndarray) -> np.ndarray:
+        outputs = self.runner.run(
+            {"obs": observation, "hidden_state": self._hidden_state, "cell_state": self._cell_state}
+        )
+        self._hidden_state = outputs["next_hidden_state"]
+        self._cell_state = outputs["next_cell_state"]
+        return outputs["actions"]
 
     @property
     def standing_target(self) -> np.ndarray:

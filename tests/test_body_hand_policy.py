@@ -16,10 +16,10 @@ from tests.body_hand_helpers import (
     motion_data,
     policy_cfg,
     policy_data,
-    session,
     training_bundle,
 )
 from tests.config_helpers import compose_config
+from tests.runner_helpers import body_hand_runner
 
 IDENTITY = np.array([1.0, 0.0, 0.0, 0.0])
 
@@ -29,10 +29,10 @@ def build_policy(cfg=None, motion=None, body=None, hand=None, mimic=None, inspir
     return BodyHandPolicy(
         cfg if cfg is not None else policy_cfg(),
         motion if motion is not None else motion_cfg(),
-        device="cpu",
         runtime_body_joint_names=body if body is not None else body_joint_names(),
         runtime_hand_joint_names=hand if hand is not None else inspire.dof.joint_names,
         hand_mimic=mimic if mimic is not None else inspire.mimic,
+        runner=body_hand_runner(),
     )
 
 
@@ -46,13 +46,14 @@ class TestModelInterface(unittest.TestCase):
         )
 
     def test_the_graph_signature_matches_the_policy_config(self):
-        graph = session()
         policy = build_policy()
-        self.assertEqual(list(graph.get_inputs()[0].shape), [1, policy.observation_dim])
-        self.assertEqual(list(graph.get_outputs()[0].shape), [1, policy.action_dim])
+        self.assertEqual(policy.runner.shape("obs"), (1, policy.observation_dim))
+        self.assertEqual(policy.runner.shape("actions"), (1, policy.action_dim))
 
-    def test_the_graph_does_not_own_deployment_configuration(self):
-        self.assertEqual(session().get_modelmeta().custom_metadata_map, {})
+    def test_the_graph_uses_only_tensor_names(self):
+        policy = build_policy()
+        self.assertEqual(policy.runner.input_names, ("obs",))
+        self.assertEqual(policy.runner.output_names, ("actions",))
 
 
 class TestBodyHandPolicy(unittest.TestCase):
@@ -234,7 +235,7 @@ class TestConfigurationOwnership(unittest.TestCase):
 
     def test_the_runner_owns_startup_and_recording(self):
         root = OmegaConf.load(CONFIG_DIR / "run_body_hand.yaml")
-        self.assertEqual(set(root), {"defaults", "device", "startup", "recording", "env", "hydra"})
+        self.assertEqual(set(root), {"defaults", "startup", "recording", "env", "hydra"})
         self.assertEqual(set(root.startup), {"ramp_seconds", "blend_seconds"})
         self.assertEqual(set(root.recording), {"enabled", "directory"})
 

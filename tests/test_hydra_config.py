@@ -41,7 +41,7 @@ class TestHydraConfig(unittest.TestCase):
 
     def test_root_config_only_composes_config_groups_and_launcher_settings(self):
         root = OmegaConf.load(CONFIG_DIR / "run_pipeline.yaml")
-        self.assertEqual(set(root), {"defaults", "device", "recording", "env", "hydra"})
+        self.assertEqual(set(root), {"defaults", "recording", "env", "hydra"})
 
         robot_path = CONFIG_DIR / "robot/g1.yaml"
         policy_path = CONFIG_DIR / "policy/leggedlab_g1.yaml"
@@ -140,7 +140,7 @@ class TestHydraConfig(unittest.TestCase):
                 effective_dof = compose_dof_config(cfg.robot.dof, cfg.policy.dof)
                 mutate(cfg)
                 with self.assertRaises(ValueError):
-                    LeggedLabPolicy(cfg.policy, device="cpu", dof_cfg=effective_dof)
+                    LeggedLabPolicy(cfg.policy, dof_cfg=effective_dof)
 
     def test_launcher_is_native_hydra_without_argparse(self):
         module = ast.parse(LAUNCHER.read_text(), filename=LAUNCHER.as_posix())
@@ -225,7 +225,7 @@ class TestHydraConfig(unittest.TestCase):
                 task_cfg = OmegaConf.create(result.stdout)
                 self.assertIn("domain_id", task_cfg.env)
 
-    def test_jetson_bootstrap_precedes_numpy_stack_imports(self):
+    def test_jetson_bootstrap_does_not_import_an_inference_framework(self):
         def import_lines(module: ast.Module, package: str) -> list[int]:
             lines = []
             for node in ast.walk(module):
@@ -252,7 +252,8 @@ class TestHydraConfig(unittest.TestCase):
 
         package_init = REPO_ROOT / "g1_playground/__init__.py"
         init_module = ast.parse(package_init.read_text(), filename=package_init.as_posix())
-        self.assertLess(min(import_lines(init_module, "torch")), min(import_lines(init_module, "numpy")))
+        self.assertEqual(import_lines(init_module, "torch"), [])
+        self.assertEqual(import_lines(init_module, "onnxruntime"), [])
 
     def test_cli_rejects_unknown_deployment_and_override(self):
         commands = (

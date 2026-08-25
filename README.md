@@ -21,7 +21,7 @@ server retains the repository-owned `G1MujocoBackend` physics core and always op
 
 The policy observes and commands all 29 joints. Its 50 Hz rate, single-frame 96-to-29 layout, and recurrent LSTM state
 are class-level checkpoint contracts; they are not deployment tuning fields. The checkpoint is stored at
-`assets/models/leggedlab/g1_policy.pt`.
+`assets/models/leggedlab/g1_policy.onnx`.
 
 ## Installation
 
@@ -36,6 +36,18 @@ conda activate g1-playground
 pip install -e .
 python scripts/setup/install_third_party.py unitree_cpp
 ```
+
+Policy inference uses the TensorRT distribution installed under `~/TensorRT`. Install its Python 3.11 wheel once in
+each machine's environment; the wheel is architecture-specific and therefore is not listed in `requirements.txt`:
+
+```bash
+export TENSORRT_ROOT="$HOME/TensorRT"
+python -m pip install "$TENSORRT_ROOT"/python/tensorrt-*-cp311-none-linux_"$(uname -m)".whl
+```
+
+At first policy construction, the runtime compiles each ONNX graph into `.cache/tensorrt/`. Later runs reuse the engine
+when the graph, external weights, TensorRT version, architecture, and GPU compute capability all match. Engines are local
+build artifacts and are intentionally neither committed nor copied between the workstation and Jetson.
 
 The simulation and hardware paths both require the vendored `unitree_cpp` binding, Unitree SDK2, and CycloneDDS because
 `G1Env` uses its `G1DdsControlEndpoint`. The binding's `G1DdsRobotEndpoint` is an additional simulation-only adapter. The

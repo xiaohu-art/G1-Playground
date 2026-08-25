@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 
 import numpy as np
-import onnxruntime as ort
 from omegaconf import OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,10 +13,6 @@ DEFAULT_BUNDLE = Path(
     "/home/ubuntu/Desktop/IsaacSim51/g1_hoi_learning/logs/rsl_rl"
     "/g1_inspire_body_hand_distill/2026-08-21_22-15-00/exported"
 )
-
-
-def session(path=None):
-    return ort.InferenceSession(str(path or MODEL_PATH), providers=["CPUExecutionProvider"])
 
 
 def motion_data():

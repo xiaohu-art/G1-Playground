@@ -6,7 +6,6 @@ defaults:
   - override hydra/hydra_logging: disabled
   - _self_
 
-device: cpu
 inspire_service: false
 inspire_serial:
   left: /dev/serial/by-path/platform-3610000.usb-usb-0:2.2.2:1.0-port0

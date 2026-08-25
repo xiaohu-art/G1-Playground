@@ -690,9 +690,9 @@
   },
   "assets": {
     "checkpoint": {
-      "path": "assets/models/leggedlab/g1_policy.pt",
-      "bytes": 2149330,
-      "sha256": "d1d91b0201beeb649a4624ba40052d10fe4aebe98bf6f4847decf75dd1fee2da"
+      "path": "assets/models/leggedlab/g1_policy.onnx",
+      "bytes": 2125962,
+      "sha256": "a0f51e96817ddca0d7db385a56baf4f9ebf85fda9c33ac52837c25919930e71e"
     },
     "xml": {
       "path": "assets/robots/g1/g1_29dof_rev_1_0.xml",
@@ -701,8 +701,8 @@
     },
     "closure": {
       "file_count": 37,
-      "total_bytes": 21841775,
-      "sha256": "712b38a86da49f25a260491962e059d4ca87d4d482e6b61b5eb5ceaec506f7a7"
+      "total_bytes": 21818407,
+      "sha256": "84c1f7baaa0993c0cecdc9e3a178e5a40d3f3c6ddbf98bf9ec3249cc2629bdbd"
     }
   },
   "vendors": {

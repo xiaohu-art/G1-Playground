@@ -7,8 +7,6 @@ defaults:
   - override hydra/hydra_logging: disabled
   - _self_
 
-device: cpu
-
 startup:
   ramp_seconds: 3.0
   blend_seconds: 5.0

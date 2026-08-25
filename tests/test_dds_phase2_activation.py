@@ -520,7 +520,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
             dt = 0.02
             standing_target = np.zeros(29, dtype=np.float32)
 
-            def __init__(self, cfg_policy, device, dof_cfg):
+            def __init__(self, cfg_policy, dof_cfg):
                 pass
 
             def act(self, state, control):
@@ -580,7 +580,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
             dt = 0.02
             standing_target = np.ones(29, dtype=np.float32)
 
-            def __init__(self, cfg_policy, device, dof_cfg):
+            def __init__(self, cfg_policy, dof_cfg):
                 pass
 
             def act(self, state, control):
@@ -666,7 +666,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
             dt = 0.02
             standing_target = standing
 
-            def __init__(self, cfg_policy, device, dof_cfg):
+            def __init__(self, cfg_policy, dof_cfg):
                 events.append("policy.construct")
                 self.reset_done = False
 
@@ -751,7 +751,7 @@ class TestDdsPhase2LauncherTeardown(unittest.TestCase):
             freq = 50
             standing_target = np.zeros(29, dtype=np.float32)
 
-            def __init__(self, cfg_policy, device, dof_cfg):
+            def __init__(self, cfg_policy, dof_cfg):
                 events.append("policy.construct")
                 self.dt = 0.02
 
