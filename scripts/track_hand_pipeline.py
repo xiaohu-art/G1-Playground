@@ -7,7 +7,6 @@ if platform.machine().startswith("aarch64"):
     os.environ["OMP_NUM_THREADS"] = "1"
 
 import logging
-import subprocess
 import time
 
 # Apply the Jetson process settings before importing the numerical stack.
@@ -20,6 +19,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from g1_playground.inspire import dof as inspire_dof
 from g1_playground.inspire.hand_env import InspireHandEnv
+from g1_playground.inspire.service import InspireService
 from g1_playground.policy.track import TrackPolicy
 from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import compose_dof_config
@@ -31,64 +31,6 @@ RAMP_SECONDS = 3.0
 BLEND_SECONDS = 5.0
 IDLE_CONTROL = {"axes": {}}
 VISER_PORT = 8080
-INSPIRE_SERVICE = "third_party/dfx_inspire_service/build/inspire_g1"
-
-
-class InspireService:
-    def __init__(self, net_if: str, domain_id: int, left_serial: str, right_serial: str):
-        if domain_id != 0:
-            raise ValueError(
-                f"the DFX inspire service hardcodes DDS domain 0; this deployment uses domain {domain_id}. "
-                "Run the simulator peer instead, or leave inspire_service=false."
-            )
-        self.binary = resolve_repo_path(INSPIRE_SERVICE)
-        if not os.access(self.binary, os.X_OK):
-            raise FileNotFoundError(
-                f"{self.binary} is not executable; build it with "
-                "'cd third_party/dfx_inspire_service && mkdir -p build && cd build && cmake .. && make -j4'"
-            )
-        self.net_if = net_if
-        self.left_serial = left_serial
-        self.right_serial = right_serial
-        self.process = None
-        self.log = None
-
-    def start(self) -> None:
-        log_path = os.path.join("logs", "inspire_service.log")
-        os.makedirs("logs", exist_ok=True)
-        self.log = open(log_path, "w", encoding="utf-8")
-        logger.warning("Starting the DFX inspire service, logging to %s", log_path)
-        self.process = subprocess.Popen(
-            [
-                self.binary,
-                "--network",
-                self.net_if,
-                "--left-serial",
-                self.left_serial,
-                "--right-serial",
-                self.right_serial,
-            ],
-            stdout=self.log,
-            stderr=subprocess.STDOUT,
-        )
-        time.sleep(1.0)
-        if self.process.poll() is not None:
-            raise RuntimeError(
-                f"the inspire service exited immediately (code {self.process.returncode}); see {log_path}. "
-                "Are the serial ports free and is this session in the dialout group?"
-            )
-
-    def stop(self) -> None:
-        if self.process is not None and self.process.poll() is None:
-            logger.warning("Stopping the DFX inspire service")
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=3.0)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=3.0)
-        if self.log is not None:
-            self.log.close()
 
 
 def read_frame(env, controller):

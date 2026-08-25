@@ -1,5 +1,10 @@
 # @package _global_
 
+inspire_service: true
+inspire_serial:
+  left: /dev/serial/by-path/platform-3610000.usb-usb-0:2.2.2:1.0-port0
+  right: /dev/serial/by-path/platform-3610000.usb-usb-0:2.2.4:1.0-port0
+
 env:
   domain_id: 0
   net_if: enP8p1s0

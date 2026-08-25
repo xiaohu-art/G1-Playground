@@ -32,9 +32,6 @@ class TestHydraConfig(unittest.TestCase):
                 "policy/leggedlab_g1.yaml",
                 "policy/track.yaml",
                 "policy/body_hand_distill_largebox.yaml",
-                "motion/largebox_022_v00.yaml",
-                "motion/largebox_037_v02.yaml",
-                "motion/largebox_039_v00.yaml",
             },
         )
         self.assertFalse((REPO_ROOT / "g1_playground/config").exists())

@@ -7,7 +7,8 @@ from omegaconf import OmegaConf
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = REPO_ROOT / "configs"
 MODEL_PATH = REPO_ROOT / "assets/models/body_hand_distill/largebox/policy.onnx"
-MOTION_PATH = REPO_ROOT / "assets/motions/largebox/sub16_largebox_022_v00.npz"
+MOTION_PATH = REPO_ROOT / "assets/motions/largebox_v02.npz"
+MOTION_NAME = "sub16_largebox_013_v02"
 BUNDLE_ENV = "G1_PLAYGROUND_BODY_HAND_BUNDLE"
 DEFAULT_BUNDLE = Path(
     "/home/ubuntu/Desktop/IsaacSim51/g1_hoi_learning/logs/rsl_rl"
@@ -16,7 +17,19 @@ DEFAULT_BUNDLE = Path(
 
 
 def motion_data():
-    return np.load(MOTION_PATH, allow_pickle=False)
+    with np.load(MOTION_PATH, allow_pickle=False) as motions:
+        names = [str(name) for name in motions["motion_names"]]
+        index = names.index(MOTION_NAME)
+        lengths = np.asarray(motions["motion_lengths"], dtype=np.int64)
+        start = int(lengths[:index].sum())
+        stop = start + int(lengths[index])
+        return {
+            "joint_names": motions["joint_names"].copy(),
+            "joint_pos": motions["joint_pos"][start:stop].copy(),
+            "anchor_pos_w": motions["anchor_pos_w"][start:stop].copy(),
+            "anchor_quat_w": motions["anchor_quat_w"][start:stop].copy(),
+            "fps": motions["fps"].copy(),
+        }
 
 
 def policy_cfg(**overrides):
@@ -31,7 +44,7 @@ def policy_data() -> dict:
 
 
 def motion_cfg(**overrides):
-    cfg = OmegaConf.load(CONFIG_DIR / "motion/largebox_022_v00.yaml")
+    cfg = OmegaConf.load(CONFIG_DIR / "run_body_hand.yaml").motion
     for key, value in overrides.items():
         cfg[key] = value
     return cfg

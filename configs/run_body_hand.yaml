@@ -1,11 +1,14 @@
 defaults:
   - robot: g1
   - policy: body_hand_distill_largebox
-  - motion: largebox_039_v00
   - deployment: sim
   - override hydra/job_logging: disabled
   - override hydra/hydra_logging: disabled
   - _self_
+
+motion:
+  file: assets/motions/largebox_v02.npz
+  name: sub16_largebox_013_v02
 
 startup:
   ramp_seconds: 3.0

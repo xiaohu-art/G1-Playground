@@ -9,7 +9,10 @@ import mujoco
 import numpy as np
 from omegaconf import OmegaConf
 
+from g1_playground.inspire import dof as inspire_dof
+from g1_playground.policy.body_hand.observation import JointAssembler, ReferenceMotion
 from g1_playground.utils import resolve_repo_path
+from g1_playground.utils.dof import DoFAdapter
 from g1_playground.utils.logger import setup_logger
 from g1_playground.utils.math import quat_inv, quat_mul, quat_rotate, yaw_quat
 
@@ -25,6 +28,7 @@ BEFORE_RGBA = (0.55, 0.55, 0.55, 1.0)
 AFTER_RGBA = (0.1, 0.85, 0.3, 1.0)
 CAPTURE_RGBA = (1.0, 0.85, 0.0, 1.0)
 CAPTURE_RADIUS = 0.05
+GHOST_RGBA = (0.1, 0.8, 1.0, 0.28)
 WORLD_AXES = (
     ((AXIS_LENGTH, 0.0, 0.0), (1.0, 0.0, 0.0, 1.0)),
     ((0.0, AXIS_LENGTH, 0.0), (0.0, 1.0, 0.0, 1.0)),
@@ -63,12 +67,14 @@ def add_geom(scene, kind, rgba, size, pos):
     return geom
 
 
-def draw_path(scene, position, active) -> None:
+def draw_path(scene, position, active, reserve=0) -> None:
     ground = position.copy()
     ground[:, 2] = PATH_LIFT
-    budget = max(scene.maxgeom - scene.ngeom - 2, 0)
-    stride = max(len(ground) // max(budget, 1), 1)
+    budget = max(scene.maxgeom - scene.ngeom - reserve - 2, 0)
+    stride = max(int(np.ceil((len(ground) - 1) / max(budget, 1))), 1)
     samples = list(range(0, len(ground), stride))
+    if samples[-1] != len(ground) - 1:
+        samples.append(len(ground) - 1)
     for start, end in zip(samples, samples[1:], strict=False):
         rgba = AFTER_RGBA if (active is not None and bool(active[end])) else BEFORE_RGBA
         geom = add_geom(scene, mujoco.mjtGeom.mjGEOM_LINE, rgba, np.zeros(3), np.zeros(3))  # pyright: ignore[reportAttributeAccessIssue]
@@ -90,6 +96,31 @@ def draw_path(scene, position, active) -> None:
             (CAPTURE_RADIUS, CAPTURE_RADIUS, CAPTURE_RADIUS),
             ground[capture],
         )
+
+
+def robot_geom_count(model) -> int:
+    return int(np.count_nonzero(model.geom_bodyid))
+
+
+def draw_ghost(scene, model, data) -> None:
+    for geom_index in np.flatnonzero(model.geom_bodyid):
+        geom_type = int(model.geom_type[geom_index])
+        visual = add_geom(
+            scene,
+            geom_type,
+            GHOST_RGBA,
+            model.geom_size[geom_index],
+            data.geom_xpos[geom_index],
+        )
+        if visual is None:
+            return
+        visual.mat[:] = data.geom_xmat[geom_index].reshape(3, 3)
+        dataid = int(model.geom_dataid[geom_index])
+        visual.dataid = 2 * dataid if geom_type == int(mujoco.mjtGeom.mjGEOM_MESH) else dataid
+        visual.objtype = int(mujoco.mjtObj.mjOBJ_GEOM)  # pyright: ignore[reportAttributeAccessIssue]
+        visual.objid = int(geom_index)
+        visual.category = int(mujoco.mjtCatBit.mjCAT_DECOR)  # pyright: ignore[reportAttributeAccessIssue]
+        visual.transparent = 1
 
 
 def latest_recording(directory: str = "logs") -> str:
@@ -138,6 +169,62 @@ def base_trajectory(state):
     return position, orientation
 
 
+def replay_model_path(cfg, state) -> str:
+    if cfg is not None and "hand_pos" in state.files and "inspire" in cfg and cfg.inspire.get("xml"):
+        return str(cfg.inspire.xml)
+    return str(cfg.robot.xml) if cfg is not None else DEFAULT_XML
+
+
+def recorded_joint_positions(state, cfg, model) -> np.ndarray:
+    body = np.asarray(state["dof_pos"], dtype=np.float64)
+    if body.shape[1] == model.nu:
+        return body
+    if cfg is None or "hand_pos" not in state.files or "inspire" not in cfg:
+        raise SystemExit(f"The model has {model.nu} actuators but the recording stores {body.shape[1]} joints")
+
+    model_joint_names = inspire_dof.actuator_names(model)
+    assembler = JointAssembler(
+        model_joint_names,
+        cfg.robot.dof.joint_names,
+        cfg.inspire.dof.joint_names,
+        cfg.inspire.mimic,
+    )
+    hand = np.asarray(state["hand_pos"], dtype=np.float64)
+    return np.stack([assembler.positions(body[index], hand[index]) for index in range(len(body))])
+
+
+def reference_trajectory(state, cfg, model):
+    if cfg is None or "motion" not in cfg or "motion_frame" not in state.files:
+        return None
+    motion_path = resolve_repo_path(cfg.motion.file)
+    if not os.path.exists(motion_path):
+        logger.warning("Reference ghost disabled: motion bundle does not exist: %s", motion_path)
+        return None
+
+    with np.load(motion_path, allow_pickle=False) as motions:
+        names = [str(name) for name in motions["motion_names"]]
+        try:
+            motion_index = names.index(str(cfg.motion.name))
+        except ValueError as error:
+            raise SystemExit(f"Reference motion {cfg.motion.name!r} is not in {cfg.motion.file}") from error
+        lengths = np.asarray(motions["motion_lengths"], dtype=np.int64)
+        start = int(lengths[:motion_index].sum())
+        stop = start + int(lengths[motion_index])
+        motion = ReferenceMotion(
+            motions["joint_pos"][start:stop],
+            motions["anchor_pos_w"][start:stop],
+            motions["anchor_quat_w"][start:stop],
+            [0],
+        )
+        adapter = DoFAdapter([str(name) for name in motions["joint_names"]], inspire_dof.actuator_names(model))
+
+    motion.align()
+    frames = np.asarray(state["motion_frame"], dtype=np.int64)
+    if not np.any((0 <= frames) & (frames < motion.num_frames)):
+        return None
+    return frames, motion.joint_pos[:, adapter.indices], motion.anchor_pos, motion.anchor_quat
+
+
 def run(argv=None) -> None:
     parser = argparse.ArgumentParser(description="Kinematic MuJoCo replay of a recorded G1 trajectory")
     parser.add_argument("directory", nargs="?", help="a logs/state_<timestamp> directory; defaults to the newest")
@@ -150,15 +237,15 @@ def run(argv=None) -> None:
     cfg = OmegaConf.load(config_path) if os.path.exists(config_path) else None
 
     model = mujoco.MjModel.from_xml_path(  # pyright: ignore[reportAttributeAccessIssue]
-        resolve_repo_path(cfg.robot.xml if cfg is not None else DEFAULT_XML)
+        resolve_repo_path(replay_model_path(cfg, state))
     )
     data = mujoco.MjData(model)  # pyright: ignore[reportAttributeAccessIssue]
 
-    joints = np.asarray(state["dof_pos"], dtype=np.float64)
-    if joints.shape[1] != model.nu:
-        raise SystemExit(f"The model has {model.nu} actuators but the recording stores {joints.shape[1]} joints")
+    joints = recorded_joint_positions(state, cfg, model)
     elapsed = np.asarray(state["elapsed"], dtype=np.float64)
     position, quaternion = base_trajectory(state)
+    reference = reference_trajectory(state, cfg, model)
+    ghost_data = mujoco.MjData(model) if reference is not None else None  # pyright: ignore[reportAttributeAccessIssue]
 
     logger.warning("Replaying %d frames (%.1f s) from %s", len(elapsed), elapsed[-1] - elapsed[0], directory)
     if cfg is not None:
@@ -174,7 +261,8 @@ def run(argv=None) -> None:
         active = rebase[2] if rebase is not None else None
         viewer.user_scn.ngeom = 0
         draw_world_frame(viewer.user_scn)
-        draw_path(viewer.user_scn, position, active)
+        draw_path(viewer.user_scn, position, active, robot_geom_count(model) if reference is not None else 0)
+        overlay_geoms = viewer.user_scn.ngeom
         anchor = "the rebase origin" if rebase is not None else "the first recorded frame"
         logger.warning("World frame at %s: x red, y green, z blue, %.2f m", anchor, AXIS_LENGTH)
         if active is not None:
@@ -186,6 +274,11 @@ def run(argv=None) -> None:
             )
         else:
             logger.warning("Path drawn in grey; this recording was never rebased")
+        if reference is not None:
+            valid = np.count_nonzero((0 <= reference[0]) & (reference[0] < len(reference[1])))
+            logger.warning("Reference ghost: cyan at %d recorded HOI frames", valid)
+        else:
+            logger.warning("Reference ghost unavailable in this recording")
         started = time.monotonic()
         for index in range(len(elapsed)):
             if not viewer.is_running():
@@ -196,6 +289,16 @@ def run(argv=None) -> None:
             data.qpos[7 : 7 + model.nu] = joints[index]
             mujoco.mj_forward(model, data)  # pyright: ignore[reportAttributeAccessIssue]
             with viewer.lock():
+                viewer.user_scn.ngeom = overlay_geoms
+                if reference is not None:
+                    motion_frame = int(reference[0][index])
+                    if 0 <= motion_frame < len(reference[1]):
+                        ghost_data.qpos[:] = 0.0
+                        ghost_data.qpos[0:3] = reference[2][motion_frame]
+                        ghost_data.qpos[3:7] = reference[3][motion_frame]
+                        ghost_data.qpos[7 : 7 + model.nu] = reference[1][motion_frame]
+                        mujoco.mj_forward(model, ghost_data)  # pyright: ignore[reportAttributeAccessIssue]
+                        draw_ghost(viewer.user_scn, model, ghost_data)
                 viewer.cam.lookat[:] = data.qpos[0:3]
             viewer.sync()
             remaining = started + elapsed[index] - elapsed[0] - time.monotonic()

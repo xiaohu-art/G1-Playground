@@ -4,11 +4,14 @@ defaults:
   - policy@loco: leggedlab_g1
   - policy@hoi: body_hand_distill_largebox
   - policy@track: track
-  - motion: largebox_037_v02
   - deployment: sim
   - override hydra/job_logging: disabled
   - override hydra/hydra_logging: disabled
   - _self_
+
+motion:
+  file: assets/motions/clothesstand_v02.npz
+  name: null
 
 startup:
   ramp_seconds: 3.0

@@ -1,4 +1,5 @@
 import importlib.util
+import io
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -435,6 +436,53 @@ class TestSafetyBoundary(unittest.TestCase):
         self.assertEqual(run.hoi.frames, [])
 
 
+class TestMotionSelection(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.module = load_launcher()
+        cls.cfg = compose_config("sim", config_name="run_loco_hoi_track").motion
+
+    def test_non_terminal_input_uses_the_first_motion_when_name_is_unset(self):
+        with np.load(REPO_ROOT / self.cfg.file, allow_pickle=False) as motions:
+            expected = str(motions["motion_names"][0])
+        stdin = SimpleNamespace(isatty=lambda: False)
+        with patch.object(self.module.sys, "stdin", stdin):
+            self.assertEqual(self.module.select_motion(self.cfg), expected)
+
+    def test_a_different_object_bundle_starts_from_its_first_motion(self):
+        cfg = self.cfg.copy()
+        cfg.file = "assets/motions/smallbox_v02.npz"
+        with np.load(REPO_ROOT / cfg.file, allow_pickle=False) as motions:
+            expected = str(motions["motion_names"][0])
+        stdin = SimpleNamespace(isatty=lambda: False)
+        with patch.object(self.module.sys, "stdin", stdin):
+            self.assertEqual(self.module.select_motion(cfg), expected)
+
+    def test_down_arrow_selects_the_next_motion_and_enter_confirms(self):
+        with np.load(REPO_ROOT / self.cfg.file, allow_pickle=False) as motions:
+            names = [str(name) for name in motions["motion_names"]]
+        configured = str(self.cfg.name)
+        initial = configured if configured in names else names[0]
+        expected = names[(names.index(initial) + 1) % len(names)]
+        stdin = SimpleNamespace(isatty=lambda: True, fileno=lambda: 7)
+        stdout = io.StringIO()
+        saved = ["terminal settings"]
+        with (
+            patch.object(self.module.sys, "stdin", stdin),
+            patch.object(self.module.sys, "stdout", stdout),
+            patch.object(self.module.termios, "tcgetattr", return_value=saved),
+            patch.object(self.module.termios, "tcsetattr") as restore,
+            patch.object(self.module.tty, "setraw"),
+            patch.object(self.module.select, "select", return_value=([7], [], [])),
+            patch.object(self.module.os, "read", side_effect=[b"\x1b", b"[", b"B", b"\r"]),
+        ):
+            selected = self.module.select_motion(self.cfg)
+
+        self.assertEqual(selected, expected)
+        self.assertIn(expected, stdout.getvalue())
+        restore.assert_called_once_with(7, self.module.termios.TCSADRAIN, saved)
+
+
 class TestConfiguration(unittest.TestCase):
     def test_the_run_root_composes_with_both_deployments(self):
         for deployment in ("sim", "real"):
@@ -446,10 +494,14 @@ class TestConfiguration(unittest.TestCase):
                 self.assertEqual(len(cfg.loco.dof.joint_names), 29)
                 self.assertIn("observation", cfg.hoi)
                 self.assertEqual(len(cfg.track.dof.joint_names), 29)
+                self.assertIs(cfg.inspire_service, deployment == "real")
+                if deployment == "real":
+                    self.assertIn("/dev/serial/by-path/", cfg.inspire_serial.left)
+                    self.assertIn("/dev/serial/by-path/", cfg.inspire_serial.right)
 
     def test_the_run_root_uses_policy_roles_not_task_names(self):
         root = OmegaConf.load(CONFIG_DIR / "run_loco_hoi_track.yaml")
-        self.assertEqual(set(root), {"defaults", "startup", "handover", "recording", "env", "hydra"})
+        self.assertEqual(set(root), {"defaults", "motion", "startup", "handover", "recording", "env", "hydra"})
         self.assertEqual(set(root.startup), {"ramp_seconds"})
         self.assertEqual(set(root.handover), {"to_hoi_seconds", "to_default_seconds"})
         defaults = [str(item) for item in root.defaults]

@@ -9,6 +9,8 @@ from g1_playground.utils.math import quat_inv, quat_rotate
 logger = logging.getLogger("g1_playground")
 
 SUPPORT_RELEASE_SECONDS = 3.0
+# Leaves the feet just above the floor until the startup ramp hands control to locomotion.
+SUPPORT_LANDING_SCALE = 0.69
 
 
 class G1MujocoDdsServer:
@@ -62,7 +64,10 @@ class G1MujocoDdsServer:
         if self._first_command_time is None:
             return 1.0
         active_seconds = now - self._first_command_time
-        return max(1.0 - active_seconds / SUPPORT_RELEASE_SECONDS, 0.0)
+        if active_seconds >= SUPPORT_RELEASE_SECONDS:
+            return 0.0
+        progress = max(active_seconds / SUPPORT_RELEASE_SECONDS, 0.0)
+        return 1.0 - progress * (1.0 - SUPPORT_LANDING_SCALE)
 
     def command_torque(self, command, state, now: float) -> np.ndarray:
         joint_pos = np.asarray(state.joint_pos)[self.body_index]

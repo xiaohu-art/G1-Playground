@@ -71,18 +71,27 @@ class BodyHandPolicy:
         return "obs", "actions", self.runner.shape("obs")[-1], self.runner.shape("actions")[-1]
 
     def _load_motion(self, cfg_motion, observation_joint_names, future_offsets) -> ReferenceMotion:
-        motion = np.load(resolve_repo_path(cfg_motion.file), allow_pickle=False)
-        if [str(name) for name in motion["joint_names"]] != observation_joint_names:
-            raise ValueError("Reference motion joint names do not match the policy configuration")
-        fps = int(np.asarray(motion["fps"]).reshape(-1)[0])
-        if fps != self.freq:
-            raise ValueError(f"Reference motion is {fps} Hz but the policy runs at {self.freq} Hz")
-        return ReferenceMotion(
-            motion["joint_pos"],
-            motion["anchor_pos_w"],
-            motion["anchor_quat_w"],
-            future_offsets,
-        )
+        with np.load(resolve_repo_path(cfg_motion.file), allow_pickle=False) as motions:
+            if [str(name) for name in motions["joint_names"]] != observation_joint_names:
+                raise ValueError("Reference motion joint names do not match the policy configuration")
+            fps = int(np.asarray(motions["fps"]).reshape(-1)[0])
+            if fps != self.freq:
+                raise ValueError(f"Reference motion is {fps} Hz but the policy runs at {self.freq} Hz")
+
+            names = [str(name) for name in motions["motion_names"]]
+            try:
+                index = names.index(str(cfg_motion.name))
+            except ValueError as error:
+                raise ValueError(f"Reference motion {cfg_motion.name!r} is not in {cfg_motion.file}") from error
+            lengths = np.asarray(motions["motion_lengths"], dtype=np.int64)
+            start = int(lengths[:index].sum())
+            stop = start + int(lengths[index])
+            return ReferenceMotion(
+                motions["joint_pos"][start:stop],
+                motions["anchor_pos_w"][start:stop],
+                motions["anchor_quat_w"][start:stop],
+                future_offsets,
+            )
 
     def infer(self, observation: np.ndarray) -> np.ndarray:
         outputs = self.runner.run({self._obs_name: observation.reshape(1, -1)})

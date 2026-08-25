@@ -63,7 +63,7 @@ class TestBodyHandPolicy(unittest.TestCase):
         cls.config = policy_data()
 
     def test_the_complete_motion_is_loaded(self):
-        self.assertEqual(self.policy.motion.num_frames, 414)
+        self.assertEqual(self.policy.motion.num_frames, 404)
 
     def test_targets_are_split_by_joint_name(self):
         names = list(self.config["action"]["body"]["joint_names"]) + list(self.config["action"]["hand"]["joint_names"])
@@ -229,13 +229,21 @@ class TestConfigurationOwnership(unittest.TestCase):
         cfg = policy_cfg()
         self.assertNotEqual(list(cfg.action.body.joint_names), body_joint_names())
 
-    def test_the_motion_fragment_only_selects_the_file(self):
+    def test_the_motion_config_selects_one_name_from_the_bundle(self):
         cfg = motion_cfg()
-        self.assertEqual(set(cfg), {"file"})
+        self.assertEqual(set(cfg), {"file", "name"})
+        self.assertEqual(cfg.name, "sub16_largebox_013_v02")
+
+    def test_the_motion_bundle_contains_all_v02_clips(self):
+        with np.load(REPO_ROOT / str(motion_cfg().file), allow_pickle=False) as motions:
+            names = [str(name) for name in motions["motion_names"]]
+            self.assertEqual(len(names), 46)
+            self.assertTrue(all(name.endswith("_v02") for name in names))
+            self.assertEqual(int(motions["motion_lengths"].sum()), motions["joint_pos"].shape[0])
 
     def test_the_runner_owns_startup_and_recording(self):
         root = OmegaConf.load(CONFIG_DIR / "run_body_hand.yaml")
-        self.assertEqual(set(root), {"defaults", "startup", "recording", "env", "hydra"})
+        self.assertEqual(set(root), {"defaults", "motion", "startup", "recording", "env", "hydra"})
         self.assertEqual(set(root.startup), {"ramp_seconds", "blend_seconds"})
         self.assertEqual(set(root.recording), {"enabled", "directory"})
 
@@ -276,6 +284,10 @@ class TestConfigurationOwnership(unittest.TestCase):
         motion = motion_data()
         self.assertEqual([str(name) for name in motion["joint_names"]], list(cfg.observation.joint_names))
         self.assertEqual(int(np.asarray(motion["fps"]).reshape(-1)[0]), cfg.frequency)
+
+    def test_an_unknown_motion_name_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "is not in"):
+            build_policy(motion=motion_cfg(name="sub16_largebox_missing_v02"))
 
     def test_the_old_configuration_names_are_gone(self):
         for name in ("run_largebox.yaml", "policy/largebox_body_hand.yaml"):

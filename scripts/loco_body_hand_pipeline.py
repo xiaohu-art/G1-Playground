@@ -22,9 +22,11 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from g1_playground.inspire.hand_env import InspireHandEnv
+from g1_playground.inspire.service import InspireService
 from g1_playground.policy import LeggedLabPolicy
 from g1_playground.policy.body_hand import BodyHandPolicy
 from g1_playground.policy.track import TrackPolicy
+from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import compose_dof_config
 from g1_playground.utils.logger import setup_logger
 from g1_playground.utils.math import is_upright, quat_angular_velocity, quat_slerp, yaw_quat
@@ -33,6 +35,8 @@ from g1_playground.utils.recorder import record, recorder, save_recording
 logger = logging.getLogger("g1_playground")
 LOCO_TO_TRACK_KEY = b"["
 TRACK_TO_HOI_KEY = b"]"
+MOTION_UP_KEY = b"\x1b[A"
+MOTION_DOWN_KEY = b"\x1b[B"
 WARMUP_STEPS = 3
 ZERO_CONTROL = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0}}
 IDLE_CONTROL = {"axes": {}}
@@ -47,6 +51,49 @@ class Mode(Enum):
 
 class Stop(RuntimeError):
     pass
+
+
+def select_motion(cfg_motion):
+    with np.load(resolve_repo_path(cfg_motion.file), allow_pickle=False) as motions:
+        names = [str(name) for name in motions["motion_names"]]
+    selected = str(cfg_motion.name)
+    if selected not in names:
+        selected = names[0]
+    if not sys.stdin.isatty():
+        logger.warning("stdin is not a terminal; using configured HOI motion %s", selected)
+        return selected
+
+    descriptor = sys.stdin.fileno()
+    saved = termios.tcgetattr(descriptor)
+    index = names.index(selected)
+    try:
+        tty.setraw(descriptor)
+        while True:
+            sys.stdout.write(
+                f"\r\033[2KSelect HOI motion with Up/Down, Enter confirms [{index + 1}/{len(names)}]: {names[index]}"
+            )
+            sys.stdout.flush()
+            key = os.read(descriptor, 1)
+            if key == b"\x1b":
+                for _ in range(2):
+                    if not select.select([descriptor], [], [], 0.05)[0]:
+                        break
+                    key += os.read(descriptor, 1)
+            if key == MOTION_UP_KEY:
+                index = (index - 1) % len(names)
+            elif key == MOTION_DOWN_KEY:
+                index = (index + 1) % len(names)
+            elif key in (b"\r", b"\n"):
+                selected = names[index]
+                break
+            elif key == b"\x03":
+                raise KeyboardInterrupt
+    finally:
+        termios.tcsetattr(descriptor, termios.TCSADRAIN, saved)
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+    logger.warning("Selected HOI motion: %s", selected)
+    return selected
 
 
 def open_key_reader():
@@ -410,9 +457,11 @@ def run(cfg: DictConfig) -> None:
     setup_logger()
     env = None
     hand_env = None
+    inspire_service = None
     log = None
     saved_terminal = None
     try:
+        cfg.motion.name = select_motion(cfg.motion)
         loco_dof = compose_dof_config(cfg.robot.dof, cfg.loco.dof)
         track_dof = compose_dof_config(cfg.robot.dof, cfg.track.dof)
         loco = LeggedLabPolicy(cfg.loco, dof_cfg=loco_dof)
@@ -426,6 +475,14 @@ def run(cfg: DictConfig) -> None:
         track = TrackPolicy(cfg.track, dof_cfg=track_dof)
 
         env = instantiate(cfg.env, dof_cfg=loco_dof, control_dt=loco.dt)
+        if cfg.inspire_service:
+            inspire_service = InspireService(
+                cfg.env.net_if,
+                cfg.env.domain_id,
+                cfg.inspire_serial.left,
+                cfg.inspire_serial.right,
+            )
+            inspire_service.start()
         hand_env = InspireHandEnv(dof_cfg=cfg.inspire.dof, domain_id=cfg.env.domain_id, net_if=cfg.env.net_if)
         controller = instantiate(cfg.controller, env=env)
 
@@ -473,6 +530,8 @@ def run(cfg: DictConfig) -> None:
             hand_env.shutdown()
         if env is not None:
             env.shutdown()
+        if inspire_service is not None:
+            inspire_service.stop()
         if log is not None:
             save_recording(log, cfg.recording.directory, OmegaConf.to_yaml(cfg, resolve=True))
 
