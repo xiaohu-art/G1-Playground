@@ -10,11 +10,11 @@ import numpy as np
 from omegaconf import OmegaConf
 
 from g1_playground.inspire import dof as inspire_dof
-from g1_playground.policy.body_hand.observation import JointAssembler, ReferenceMotion
+from g1_playground.policy.body_hand.observation import JointAssembler
 from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import DoFAdapter
 from g1_playground.utils.logger import setup_logger
-from g1_playground.utils.math import quat_inv, quat_mul, quat_rotate, yaw_quat
+from g1_playground.utils.math import TransformAlignment, quat_inv, quat_mul, quat_rotate, yaw_quat
 
 logger = logging.getLogger("g1_playground")
 RENDER_HZ = 60.0
@@ -210,19 +210,19 @@ def reference_trajectory(state, cfg, model):
         lengths = np.asarray(motions["motion_lengths"], dtype=np.int64)
         start = int(lengths[:motion_index].sum())
         stop = start + int(lengths[motion_index])
-        motion = ReferenceMotion(
-            motions["joint_pos"][start:stop],
-            motions["anchor_pos_w"][start:stop],
-            motions["anchor_quat_w"][start:stop],
-            [0],
-        )
+        joint_pos = motions["joint_pos"][start:stop]
+        anchor_pos = motions["anchor_pos_w"][start:stop]
+        anchor_quat = motions["anchor_quat_w"][start:stop]
         adapter = DoFAdapter([str(name) for name in motions["joint_names"]], inspire_dof.actuator_names(model))
 
-    motion.align()
+    alignment = TransformAlignment(yaw_only=True, xy_only=True)
+    alignment.set_base(quat=anchor_quat[0], pos=anchor_pos[0])
+    anchor_pos = alignment.align_pos(anchor_pos)
+    anchor_quat = alignment.align_quat(anchor_quat)
     frames = np.asarray(state["motion_frame"], dtype=np.int64)
-    if not np.any((0 <= frames) & (frames < motion.num_frames)):
+    if not np.any((0 <= frames) & (frames < len(joint_pos))):
         return None
-    return frames, motion.joint_pos[:, adapter.indices], motion.anchor_pos, motion.anchor_quat
+    return frames, joint_pos[:, adapter.indices], anchor_pos, anchor_quat
 
 
 def run(argv=None) -> None:

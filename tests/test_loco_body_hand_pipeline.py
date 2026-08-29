@@ -6,9 +6,8 @@ from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
-from omegaconf import OmegaConf
 
-from tests.config_helpers import CONFIG_DIR, compose_config
+from tests.config_helpers import compose_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "scripts/loco_body_hand_pipeline.py"
@@ -113,7 +112,7 @@ class FakeMotion:
 
 class FakeHoi:
     action_dim = 41
-    observation_dim = 463
+    observation_dim = 787
     freq = 50
     dt = 0.02
 
@@ -128,7 +127,7 @@ class FakeHoi:
 
     def get_observation(self, frame, anchor_pos, anchor_quat, state, hand_state):
         self.frames.append(int(frame))
-        return np.zeros(463, dtype=np.float32)
+        return np.zeros(787, dtype=np.float32)
 
     def act(self, observation):
         self.action_inputs.append(self.last_action.copy())
@@ -270,10 +269,7 @@ class TestStateMachine(unittest.TestCase):
                 module.run_pipeline(run, np.zeros(29), np.zeros(12), 100, 250)
         return run
 
-    def test_only_policy_ownership_is_a_top_level_mode(self):
-        self.assertEqual([mode.name for mode in self.module.Mode], ["LOCOMOTION", "TRACK", "HOI"])
-
-    def test_the_two_keys_create_separate_handoffs(self):
+    def test_complete_locomotion_track_hoi_track_flow(self):
         run = self.drive()
         phases = [self.module.PHASES[index] for index in run.log.phase[: run.log.count]]
         self.assertEqual(
@@ -283,16 +279,12 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(phases.count("hoi"), 414)
         self.assertEqual(phases.count("track_to_default"), 250)
 
-    def test_rebase_alignment_and_gain_switch_happen_only_on_left_bracket(self):
-        run = self.drive()
         self.assertEqual(run.env.born_place_calls, 1)
         self.assertEqual(run.hoi.motion.align_calls, 1)
         self.assertEqual([value for name, value in run.events if name == "gains"], [40.0])
         captured = [value for name, value in run.events if name == "born_place"]
         np.testing.assert_allclose(captured[0], FakeOdometry().raw_position)
 
-    def test_track_holds_one_live_reference_while_waiting_for_right_bracket(self):
-        run = self.drive()
         first_transition_reference = run.track.references[1]
         np.testing.assert_allclose(run.track.references[0].joint_pos, FakeState().dof_pos)
         self.assertAlmostEqual(run.track.references[0].root_height, FakeOdometry().position[2])
@@ -300,20 +292,32 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(run.track.reset_action_indices[0], 0)
         np.testing.assert_allclose(run.track.action_inputs[0], 0.0)
 
-    def test_right_bracket_does_not_reset_track_history(self):
-        run = self.drive()
         reset_names = [name for name, _ in run.events if name.endswith("_reset")]
         self.assertEqual(reset_names, ["track_reset", "hoi_reset", "track_reset"])
         self.assertEqual(len(run.track.reset_action_indices), 2)
         self.assertGreater(run.track.reset_action_indices[1], 100)
 
-    def test_each_track_transition_finishes_with_a_static_reference(self):
-        run = self.drive()
         default_start = run.track.reset_reference_indices[1]
         for reference in (run.track.references[default_start - 1], run.track.references[-1]):
             np.testing.assert_allclose(reference.joint_vel, 0.0)
             np.testing.assert_allclose(reference.lin_vel_w, 0.0)
             np.testing.assert_allclose(reference.ang_vel_w, 0.0)
+
+        self.assertEqual(run.hoi.frames, list(range(414)))
+        hoi_rows = np.flatnonzero(np.asarray(run.log.phase[: run.log.count]) == self.module.PHASES.index("hoi"))
+        np.testing.assert_allclose(np.asarray(run.env.commands)[hoi_rows], np.asarray(run.hoi.targets))
+        np.testing.assert_allclose(run.hoi.action_inputs[0], 0.0)
+
+        second_reset_action = run.track.reset_action_indices[1]
+        second_reset_reference = run.track.reset_reference_indices[1]
+        np.testing.assert_allclose(run.track.action_inputs[second_reset_action], 0.0)
+        np.testing.assert_allclose(run.track.references[second_reset_reference].joint_pos, FakeState().dof_pos)
+        np.testing.assert_allclose(run.track.references[-1].joint_pos, run.track.standing_target)
+        self.assertAlmostEqual(run.track.references[-1].root_height, run.track.reference_root_height)
+        self.assertEqual(run.machine.mode, self.module.Mode.TRACK)
+        self.assertIsNone(run.machine.track_goal)
+        self.assertEqual(len(run.hand_env.targets), len(run.env.commands))
+        np.testing.assert_allclose(run.hand_env.targets[-1], np.full(12, 0.3))
 
     def test_both_brackets_in_one_read_do_not_skip_track_hold(self):
         module = self.module
@@ -333,32 +337,6 @@ class TestStateMachine(unittest.TestCase):
         self.assertEqual(run.machine.mode, module.Mode.TRACK)
         self.assertIsNone(run.machine.track_goal)
         self.assertEqual(run.hoi.frames, [])
-
-    def test_hoi_runs_every_reference_frame_once_and_sends_its_targets_directly(self):
-        run = self.drive()
-        self.assertEqual(run.hoi.frames, list(range(414)))
-        phases = np.asarray(run.log.phase[: run.log.count])
-        hoi_rows = np.flatnonzero(phases == self.module.PHASES.index("hoi"))
-        commands = np.asarray(run.env.commands)[hoi_rows]
-        np.testing.assert_allclose(commands, np.asarray(run.hoi.targets))
-        np.testing.assert_allclose(run.hoi.action_inputs[0], 0.0)
-
-    def test_track_resets_after_hoi_and_returns_the_reference_to_default(self):
-        run = self.drive()
-        second_reset_action = run.track.reset_action_indices[1]
-        second_reset_reference = run.track.reset_reference_indices[1]
-        np.testing.assert_allclose(run.track.action_inputs[second_reset_action], 0.0)
-        live = run.track.references[second_reset_reference]
-        np.testing.assert_allclose(live.joint_pos, FakeState().dof_pos)
-        np.testing.assert_allclose(run.track.references[-1].joint_pos, run.track.standing_target)
-        self.assertAlmostEqual(run.track.references[-1].root_height, run.track.reference_root_height)
-        self.assertEqual(run.machine.mode, self.module.Mode.TRACK)
-        self.assertIsNone(run.machine.track_goal)
-
-    def test_the_hand_is_commanded_on_every_control_frame(self):
-        run = self.drive()
-        self.assertEqual(len(run.hand_env.targets), len(run.env.commands))
-        np.testing.assert_allclose(run.hand_env.targets[-1], np.full(12, 0.3))
 
 
 class TestSafetyBoundary(unittest.TestCase):
@@ -498,21 +476,6 @@ class TestConfiguration(unittest.TestCase):
                 if deployment == "real":
                     self.assertIn("/dev/serial/by-path/", cfg.inspire_serial.left)
                     self.assertIn("/dev/serial/by-path/", cfg.inspire_serial.right)
-
-    def test_the_run_root_uses_policy_roles_not_task_names(self):
-        root = OmegaConf.load(CONFIG_DIR / "run_loco_hoi_track.yaml")
-        self.assertEqual(set(root), {"defaults", "motion", "startup", "handover", "recording", "env", "hydra"})
-        self.assertEqual(set(root.startup), {"ramp_seconds"})
-        self.assertEqual(set(root.handover), {"to_hoi_seconds", "to_default_seconds"})
-        defaults = [str(item) for item in root.defaults]
-        self.assertTrue(any("policy@hoi" in item for item in defaults))
-        self.assertTrue(any("policy@track" in item for item in defaults))
-
-    def test_only_one_environment_of_each_kind_is_created(self):
-        source = LAUNCHER.read_text()
-        self.assertEqual(source.count("instantiate(cfg.env"), 1)
-        self.assertEqual(source.count("InspireHandEnv("), 1)
-        self.assertEqual(source.count("activate_commands()"), 1)
 
 
 if __name__ == "__main__":

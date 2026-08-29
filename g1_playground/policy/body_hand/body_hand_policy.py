@@ -23,10 +23,15 @@ class BodyHandPolicy:
         runner=None,
     ):
         self.runner = runner or TensorRTRunner(resolve_repo_path(cfg_policy.policy_file))
+        if self.runner.input_names != ("obs",) or self.runner.output_names != ("actions",):
+            raise ValueError(
+                f"Body-hand policy requires obs -> actions, got {self.runner.input_names} -> {self.runner.output_names}"
+            )
 
         self.freq = int(cfg_policy.frequency)
         self.dt = 1.0 / self.freq
-        self._obs_name, self._output_name, self.observation_dim, self.action_dim = self._resolve_signature()
+        self.observation_dim = self.runner.shape("obs")[-1]
+        self.action_dim = self.runner.shape("actions")[-1]
 
         observation_joint_names = list(cfg_policy.observation.joint_names)
         body_action_names = list(cfg_policy.action.body.joint_names)
@@ -55,6 +60,15 @@ class BodyHandPolicy:
         self.motion = self._load_motion(cfg_motion, observation_joint_names, cfg_policy.observation.future_offsets)
         self.observation = BodyHandObservation(self.motion, default_joint_pos, self.observation_dim)
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
+        self.observation.build(
+            0,
+            self.motion.anchor_pos[0],
+            self.motion.anchor_quat[0],
+            np.zeros(3, dtype=np.float32),
+            default_joint_pos,
+            np.zeros_like(default_joint_pos),
+            self._last_action,
+        )
 
         logger.info(
             "Body-hand policy: observation [%d] -> action [%d] at %d Hz",
@@ -62,13 +76,6 @@ class BodyHandPolicy:
             self.action_dim,
             self.freq,
         )
-
-    def _resolve_signature(self) -> tuple[str, str, int, int]:
-        if self.runner.input_names != ("obs",) or self.runner.output_names != ("actions",):
-            raise ValueError(
-                f"Body-hand policy requires obs -> actions, got {self.runner.input_names} -> {self.runner.output_names}"
-            )
-        return "obs", "actions", self.runner.shape("obs")[-1], self.runner.shape("actions")[-1]
 
     def _load_motion(self, cfg_motion, observation_joint_names, future_offsets) -> ReferenceMotion:
         with np.load(resolve_repo_path(cfg_motion.file), allow_pickle=False) as motions:
@@ -90,12 +97,15 @@ class BodyHandPolicy:
                 motions["joint_pos"][start:stop],
                 motions["anchor_pos_w"][start:stop],
                 motions["anchor_quat_w"][start:stop],
+                motions["object_pos_w"][start:stop],
+                motions["object_quat_w"][start:stop],
+                motions["contact_label"][start:stop],
                 future_offsets,
             )
 
     def infer(self, observation: np.ndarray) -> np.ndarray:
-        outputs = self.runner.run({self._obs_name: observation.reshape(1, -1)})
-        return np.asarray(outputs[self._output_name], dtype=np.float32).reshape(-1)
+        outputs = self.runner.run({"obs": observation.reshape(1, -1)})
+        return np.asarray(outputs["actions"], dtype=np.float32).reshape(-1)
 
     def process(self, raw_action: np.ndarray) -> np.ndarray:
         raw_action = np.asarray(raw_action, dtype=np.float32).reshape(self.action_dim)

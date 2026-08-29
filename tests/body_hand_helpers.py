@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 
 import numpy as np
@@ -9,11 +8,6 @@ CONFIG_DIR = REPO_ROOT / "configs"
 MODEL_PATH = REPO_ROOT / "assets/models/body_hand_distill/largebox/policy.onnx"
 MOTION_PATH = REPO_ROOT / "assets/motions/largebox_v02.npz"
 MOTION_NAME = "sub16_largebox_013_v02"
-BUNDLE_ENV = "G1_PLAYGROUND_BODY_HAND_BUNDLE"
-DEFAULT_BUNDLE = Path(
-    "/home/ubuntu/Desktop/IsaacSim51/g1_hoi_learning/logs/rsl_rl"
-    "/g1_inspire_body_hand_distill/2026-08-21_22-15-00/exported"
-)
 
 
 def motion_data():
@@ -28,6 +22,9 @@ def motion_data():
             "joint_pos": motions["joint_pos"][start:stop].copy(),
             "anchor_pos_w": motions["anchor_pos_w"][start:stop].copy(),
             "anchor_quat_w": motions["anchor_quat_w"][start:stop].copy(),
+            "object_pos_w": motions["object_pos_w"][start:stop].copy(),
+            "object_quat_w": motions["object_quat_w"][start:stop].copy(),
+            "contact_label": motions["contact_label"][start:stop].copy(),
             "fps": motions["fps"].copy(),
         }
 
@@ -60,13 +57,3 @@ def body_joint_names():
 
 def hand_joint_names():
     return list(inspire_cfg().dof.joint_names)
-
-
-def training_bundle() -> Path | None:
-    candidate = Path(os.environ.get(BUNDLE_ENV, DEFAULT_BUNDLE))
-    return candidate if (candidate / "golden_frame.npz").is_file() else None
-
-
-def training_golden():
-    bundle = training_bundle()
-    return np.load(bundle / "golden_frame.npz", allow_pickle=True) if bundle is not None else None

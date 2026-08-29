@@ -10,7 +10,7 @@ defaults:
   - _self_
 
 motion:
-  file: assets/motions/clothesstand_v02.npz
+  file: assets/motions/largebox_v02.npz
   name: null
 
 startup:

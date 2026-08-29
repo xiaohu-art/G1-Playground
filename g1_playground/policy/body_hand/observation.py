@@ -7,28 +7,67 @@ GRAVITY_W = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
 
 class ReferenceMotion:
-    def __init__(self, joint_pos, anchor_pos_w, anchor_quat_w, future_offsets):
+    def __init__(
+        self,
+        joint_pos,
+        anchor_pos_w,
+        anchor_quat_w,
+        object_pos_w,
+        object_quat_w,
+        contact_label,
+        future_offsets,
+    ):
         self.joint_pos = np.asarray(joint_pos, dtype=np.float32)
         self.raw_anchor_pos = np.asarray(anchor_pos_w, dtype=np.float32)
         self.raw_anchor_quat = np.asarray(anchor_quat_w, dtype=np.float32)
+        self.raw_object_pos = np.asarray(object_pos_w, dtype=np.float32)
+        self.raw_object_quat = np.asarray(object_quat_w, dtype=np.float32)
+        self.contact_label = np.asarray(contact_label, dtype=np.float32)
         self.offsets = np.asarray(future_offsets, dtype=np.int64).reshape(-1)
         self.num_frames = int(self.joint_pos.shape[0])
+
+        for name, values, width in (
+            ("joint_pos", self.joint_pos, 53),
+            ("anchor_pos_w", self.raw_anchor_pos, 3),
+            ("anchor_quat_w", self.raw_anchor_quat, 4),
+            ("object_pos_w", self.raw_object_pos, 3),
+            ("object_quat_w", self.raw_object_quat, 4),
+            ("contact_label", self.contact_label, 54),
+        ):
+            expected = (self.num_frames, width)
+            if values.shape != expected:
+                raise ValueError(f"Reference {name} has shape {values.shape}, expected {expected}")
+        if self.num_frames == 0:
+            raise ValueError("Reference motion has no frames")
+        if self.offsets.size == 0:
+            raise ValueError("Reference motion has no future offsets")
 
         self.origin = TransformAlignment(yaw_only=True, xy_only=True)
         self.anchor_pos = self.raw_anchor_pos.copy()
         self.anchor_quat = self.raw_anchor_quat.copy()
+        self.object_pos = self.raw_object_pos.copy()
+        self.object_quat = self.raw_object_quat.copy()
 
     def align(self) -> None:
         self.origin.set_base(quat=self.raw_anchor_quat[0], pos=self.raw_anchor_pos[0])
         self.anchor_pos = self.origin.align_pos(self.raw_anchor_pos)
         self.anchor_quat = self.origin.align_quat(self.raw_anchor_quat)
+        self.object_pos = self.origin.align_pos(self.raw_object_pos)
+        self.object_quat = self.origin.align_quat(self.raw_object_quat)
 
     def future_indices(self, frame: int) -> np.ndarray:
         return np.minimum(frame + self.offsets, self.num_frames - 1)
 
     def future(self, frame: int):
         indices = self.future_indices(frame)
-        return self.joint_pos[indices], self.anchor_pos[indices], self.anchor_quat[indices]
+        return (
+            self.joint_pos[indices],
+            self.anchor_pos[indices],
+            self.anchor_quat[indices],
+            self.object_pos[indices],
+            self.object_quat[indices],
+            self.contact_label[indices],
+        )
 
 
 class JointAssembler:
@@ -78,7 +117,9 @@ class BodyHandObservation:
     def build(self, frame, anchor_pos, anchor_quat, base_ang_vel, joint_pos, joint_vel, last_action) -> np.ndarray:
         anchor_pos = np.asarray(anchor_pos, dtype=np.float32).reshape(3)
         anchor_quat = np.asarray(anchor_quat, dtype=np.float32).reshape(4)
-        future_joint_pos, future_anchor_pos, future_anchor_quat = self.motion.future(frame)
+        future_joint_pos, future_anchor_pos, future_anchor_quat, object_pos, object_quat, contact = self.motion.future(
+            frame
+        )
         inverse = quat_inv(anchor_quat)
         relative_pos = quat_rotate(inverse, future_anchor_pos - anchor_pos)
         relative_quat = quat_mul(inverse, future_anchor_quat)
@@ -88,6 +129,11 @@ class BodyHandObservation:
                 future_joint_pos.reshape(-1),
                 relative_pos.reshape(-1),
                 np.concatenate([quat_to_rot6d(quaternion) for quaternion in relative_quat]),
+                quat_rotate(inverse, object_pos - anchor_pos).reshape(-1),
+                np.concatenate([quat_to_rot6d(quaternion) for quaternion in quat_mul(inverse, object_quat)]),
+                contact.reshape(-1),
+                quat_rotate(inverse, self.motion.object_pos[frame] - anchor_pos).reshape(-1),
+                quat_to_rot6d(quat_mul(inverse, self.motion.object_quat[frame])),
                 np.asarray(base_ang_vel, dtype=np.float32).reshape(-1),
                 np.asarray(joint_pos, dtype=np.float32).reshape(-1) - self.default_joint_pos,
                 np.asarray(joint_vel, dtype=np.float32).reshape(-1),

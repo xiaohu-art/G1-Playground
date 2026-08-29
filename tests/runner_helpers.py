@@ -22,7 +22,7 @@ def body_hand_runner():
         previous_action = np.asarray(inputs["obs"], dtype=np.float32)[:, -41:]
         return {"actions": base + 0.1 * previous_action}
 
-    return FakeRunner({"obs": (1, 463)}, {"actions": (1, 41)}, infer)
+    return FakeRunner({"obs": (1, 787)}, {"actions": (1, 41)}, infer)
 
 
 def track_runner():
