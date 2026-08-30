@@ -103,7 +103,7 @@ def open_key_reader():
     descriptor = sys.stdin.fileno()
     saved = termios.tcgetattr(descriptor)
     tty.setcbreak(descriptor)
-    logger.warning("Terminal echo is off; press '[' for Locomotion -> Track, then ']' for Track -> HOI")
+    logger.warning("Terminal echo is off; press '[' to prepare HOI frame 0 with Track, then ']' to run HOI")
     return descriptor, saved
 
 
@@ -263,13 +263,27 @@ def enter_track(run, machine, state, odometry):
         ),
         np.zeros(29, dtype=np.float32),
     )
+    target_body, target_hand = run.hoi.reference_targets()
     machine.mode = Mode.TRACK
-    machine.track_goal = None
-    machine.transition = None
+    machine.hoi_ready = False
+    machine.track_goal = "hoi"
+    machine.transition = SimpleNamespace(
+        start=machine.track_reference,
+        target=SimpleNamespace(
+            root_height=float(run.hoi.motion.anchor_pos[0, 2]),
+            root_quat=np.asarray(run.hoi.motion.anchor_quat[0], dtype=np.float32),
+            joint_pos=np.asarray(target_body, dtype=np.float32),
+            hand_pos=np.asarray(target_hand, dtype=np.float64),
+        ),
+        steps=machine.to_hoi_steps,
+        step=0,
+    )
     logger.warning(
-        "Track holds the live reference at local xy=%s and body height %.3f m; press ']' to start HOI",
+        "Track captured the live reference at local xy=%s and body height %.3f m; "
+        "moving to HOI frame 0 over %.1f seconds",
         np.asarray(odometry.position)[:2],
         float(odometry.position[2]),
+        machine.to_hoi_steps * run.dt,
     )
     return state, odometry
 
@@ -304,6 +318,7 @@ def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps
         track_goal=None,
         transition=None,
         track_reference=None,
+        hoi_ready=False,
         motion_frame=0,
         body_command=np.asarray(body_command, dtype=np.float64),
         hand_command=np.asarray(hand_command, dtype=np.float64),
@@ -363,24 +378,14 @@ def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps
                         float(np.abs(target.joint_pos - machine.track_reference.joint_pos).max()),
                         target.root_height - machine.track_reference.root_height,
                     )
-                elif TRACK_TO_HOI_KEY in keys and machine.track_goal is None and machine.motion_frame == 0:
-                    target_body, target_hand = run.hoi.reference_targets()
-                    machine.track_goal = "hoi"
-                    machine.transition = SimpleNamespace(
-                        start=machine.track_reference,
-                        target=SimpleNamespace(
-                            root_height=float(run.hoi.motion.anchor_pos[0, 2]),
-                            root_quat=np.asarray(run.hoi.motion.anchor_quat[0], dtype=np.float32),
-                            joint_pos=np.asarray(target_body, dtype=np.float32),
-                            hand_pos=np.asarray(target_hand, dtype=np.float64),
-                        ),
-                        steps=machine.to_hoi_steps,
-                        step=0,
-                    )
-                    logger.warning(
-                        "Track is moving its reference to HOI frame 0 over %.1f seconds",
-                        machine.to_hoi_steps * run.dt,
-                    )
+                elif TRACK_TO_HOI_KEY in keys and machine.hoi_ready:
+                    if hand_state.stale:
+                        raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
+                    run.hoi.reset()
+                    machine.hoi_ready = False
+                    machine.motion_frame = 0
+                    machine.mode = Mode.HOI
+                    logger.warning("Running all %d HOI reference frames once", run.hoi.motion.num_frames)
 
                 if machine.track_goal == "hoi" and hand_state.stale:
                     raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
@@ -400,10 +405,8 @@ def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps
                     machine.track_goal = None
                     machine.transition = None
                     if goal == "hoi":
-                        run.hoi.reset()
-                        machine.motion_frame = 0
-                        machine.mode = Mode.HOI
-                        logger.warning("Running all %d HOI reference frames once", run.hoi.motion.num_frames)
+                        machine.hoi_ready = True
+                        logger.warning("Track holds HOI frame 0; press ']' to run HOI")
                     else:
                         logger.warning("Track holds the default reference; press the shutdown button to finish")
 

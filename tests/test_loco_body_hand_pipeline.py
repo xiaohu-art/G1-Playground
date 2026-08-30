@@ -260,7 +260,7 @@ class TestStateMachine(unittest.TestCase):
             polls += 1
             if polls == 2:
                 return {module.LOCO_TO_TRACK_KEY}, descriptor
-            if polls == 8:
+            if polls == 103:
                 return {module.TRACK_TO_HOI_KEY}, descriptor
             return set(), descriptor
 
@@ -272,9 +272,8 @@ class TestStateMachine(unittest.TestCase):
     def test_complete_locomotion_track_hoi_track_flow(self):
         run = self.drive()
         phases = [self.module.PHASES[index] for index in run.log.phase[: run.log.count]]
-        self.assertEqual(
-            phases[:8], ["locomotion", "track", "track", "track", "track", "track", "track", "track_to_hoi"]
-        )
+        self.assertEqual(phases[:3], ["locomotion", "track", "track_to_hoi"])
+        self.assertEqual(phases[102:104], ["track", "hoi"])
         self.assertEqual(phases.count("track_to_hoi"), 100)
         self.assertEqual(phases.count("hoi"), 414)
         self.assertEqual(phases.count("track_to_default"), 250)
@@ -316,10 +315,11 @@ class TestStateMachine(unittest.TestCase):
         self.assertAlmostEqual(run.track.references[-1].root_height, run.track.reference_root_height)
         self.assertEqual(run.machine.mode, self.module.Mode.TRACK)
         self.assertIsNone(run.machine.track_goal)
+        self.assertFalse(run.machine.hoi_ready)
         self.assertEqual(len(run.hand_env.targets), len(run.env.commands))
         np.testing.assert_allclose(run.hand_env.targets[-1], np.full(12, 0.3))
 
-    def test_both_brackets_in_one_read_do_not_skip_track_hold(self):
+    def test_right_bracket_before_frame_zero_is_ready_does_not_start_hoi(self):
         module = self.module
         run = make_run(module, shutdown_after=20)
         polls = 0
@@ -336,6 +336,7 @@ class TestStateMachine(unittest.TestCase):
 
         self.assertEqual(run.machine.mode, module.Mode.TRACK)
         self.assertIsNone(run.machine.track_goal)
+        self.assertTrue(run.machine.hoi_ready)
         self.assertEqual(run.hoi.frames, [])
 
 
@@ -364,7 +365,7 @@ class TestSafetyBoundary(unittest.TestCase):
         with self.assertRaisesRegex(self.module.Stop, "cannot capture the Track origin"):
             self.module.enter_track(run, machine, FakeState(), None)
 
-    def test_stale_hand_state_stops_track_to_hoi_but_not_track_entry(self):
+    def test_stale_hand_state_stops_automatic_track_to_hoi_but_not_track_entry(self):
         module = self.module
         run = make_run(module)
         run.hand_env.read = lambda: FakeHandState(age=1.0)
@@ -375,8 +376,6 @@ class TestSafetyBoundary(unittest.TestCase):
             polls += 1
             if polls == 1:
                 return {module.LOCO_TO_TRACK_KEY}, descriptor
-            if polls == 2:
-                return {module.TRACK_TO_HOI_KEY}, descriptor
             return set(), descriptor
 
         with patch.object(module, "poll_keys", side_effect=keys), patch.object(module.time, "sleep"):
@@ -402,7 +401,7 @@ class TestSafetyBoundary(unittest.TestCase):
             polls += 1
             if polls == 1:
                 return {module.LOCO_TO_TRACK_KEY}, descriptor
-            if polls == 2:
+            if polls == 3:
                 return {module.TRACK_TO_HOI_KEY}, descriptor
             return set(), descriptor
 
