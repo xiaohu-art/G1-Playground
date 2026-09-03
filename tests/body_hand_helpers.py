@@ -3,10 +3,11 @@ from pathlib import Path
 import numpy as np
 from omegaconf import OmegaConf
 
+from tests.config_helpers import compose_config
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = REPO_ROOT / "configs"
-MODEL_PATH = REPO_ROOT / "assets/models/body_hand_distill/largebox/policy.onnx"
-MOTION_PATH = REPO_ROOT / "assets/motions/largebox_v02.npz"
+MOTION_PATH = REPO_ROOT / "assets/motions/clips/largebox_v02.npz"
 MOTION_NAME = "sub16_largebox_013_v02"
 
 
@@ -30,7 +31,8 @@ def motion_data():
 
 
 def policy_cfg(**overrides):
-    cfg = OmegaConf.load(CONFIG_DIR / "policy/body_hand_distill_largebox.yaml")
+    composed = compose_config("sim", "hoi=depth/largebox", config_name="run_loco_hoi_track")
+    cfg = OmegaConf.create(OmegaConf.to_container(composed.hoi, resolve=True))
     for key, value in overrides.items():
         cfg[key] = value
     return cfg
@@ -41,7 +43,9 @@ def policy_data() -> dict:
 
 
 def motion_cfg(**overrides):
-    cfg = OmegaConf.load(CONFIG_DIR / "run_body_hand.yaml").motion
+    composed = compose_config("sim", "hoi=depth/largebox", config_name="run_loco_hoi_track")
+    cfg = OmegaConf.create(OmegaConf.to_container(composed.motion, resolve=True))
+    cfg.name = MOTION_NAME
     for key, value in overrides.items():
         cfg[key] = value
     return cfg

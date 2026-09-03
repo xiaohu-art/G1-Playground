@@ -429,7 +429,7 @@
                 </body>
               </body>
             </body>
-            <camera name="training_d435_depth" pos="0.0576235 0.01753 0.42987" quat="0.659253548292 0.255704436927 -0.255704436927 -0.659253548292" focalpixel="102.947395325 99.4556274414" principalpixel="96 54" resolution="192 108" sensorsize="192 108" />
+            <camera name="training_d435_depth" pos="0.0576235 0.01753 0.42987" quat="0.659253548292 0.255704436927 -0.255704436927 -0.659253548292" focalpixel="102.947395325 99.4556274414" principalpixel="0 0" resolution="192 108" sensorsize="192 108" />
           </body>
         </body>
       </body>

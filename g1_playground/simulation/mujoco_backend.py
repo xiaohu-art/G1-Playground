@@ -4,6 +4,8 @@ from threading import Lock
 import mujoco
 import numpy as np
 
+from .mujoco_scene import compile_mujoco_scene
+
 
 def snapshot(values: np.ndarray) -> np.ndarray:
     result = np.asarray(values).copy()
@@ -44,6 +46,14 @@ class ElasticSupport:
         if body_id < 0:
             raise ValueError(f"MuJoCo model has no body named {body_name!r}")
         self.body_id = body_id
+        pelvis_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
+        if pelvis_id < 0 or model.body_jntnum[pelvis_id] != 1:
+            raise ValueError("G1 MuJoCo model must define one pelvis joint")
+        root_joint_id = int(model.body_jntadr[pelvis_id])
+        if model.jnt_type[root_joint_id] != mujoco.mjtJoint.mjJNT_FREE:
+            raise ValueError("G1 pelvis joint must be free")
+        self.root_qpos_address = int(model.jnt_qposadr[root_joint_id])
+        self.root_dof_address = int(model.jnt_dofadr[root_joint_id])
         self.anchor = np.asarray(anchor, dtype=np.float64)
         if self.anchor.shape != (3,) or not np.all(np.isfinite(self.anchor)):
             raise ValueError("Elastic support anchor must contain three finite values")
@@ -74,13 +84,15 @@ class ElasticSupport:
         if self.scale == 0.0:
             return np.zeros(3, dtype=np.float64)
 
-        displacement = self.anchor - np.asarray(data.qpos[:3])
+        root_position = data.qpos[self.root_qpos_address : self.root_qpos_address + 3]
+        displacement = self.anchor - np.asarray(root_position)
         distance = float(np.linalg.norm(displacement))
         if distance <= np.finfo(np.float64).eps:
             return np.zeros(3, dtype=np.float64)
 
         direction = displacement / distance
-        velocity_along_band = float(np.dot(data.qvel[:3], direction))
+        root_velocity = data.qvel[self.root_dof_address : self.root_dof_address + 3]
+        velocity_along_band = float(np.dot(root_velocity, direction))
         magnitude = self.stiffness * (distance - self.length) - self.damping * velocity_along_band
         force = self.scale * magnitude * direction
         data.xfrc_applied[self.body_id, :3] += force
@@ -91,7 +103,7 @@ class ElasticSupport:
 
 
 class G1MujocoBackend:
-    """Pure MuJoCo physics for the floating-base 29-DoF G1 model."""
+    """Pure MuJoCo physics for a floating-base G1 model."""
 
     def __init__(
         self,
@@ -100,6 +112,9 @@ class G1MujocoBackend:
         *,
         elastic_support_scale: float = 0.0,
         expected_actuators: int = 29,
+        object_mjcf: str | None = None,
+        object_position: np.ndarray | None = None,
+        object_quaternion: np.ndarray | None = None,
     ):
         if (
             isinstance(timestep, bool)
@@ -109,18 +124,32 @@ class G1MujocoBackend:
         ):
             raise ValueError("MuJoCo backend timestep must be finite and positive")
         self.timestep = float(timestep)
-        self.model = mujoco.MjModel.from_xml_path(xml_path)  # pyright: ignore[reportAttributeAccessIssue]
+        if object_mjcf is None:
+            if object_position is not None or object_quaternion is not None:
+                raise ValueError("An object pose requires an object MJCF")
+            self.model = mujoco.MjModel.from_xml_path(xml_path)  # pyright: ignore[reportAttributeAccessIssue]
+        else:
+            self.model = compile_mujoco_scene(
+                xml_path,
+                object_mjcf,
+                object_position=object_position,
+                object_quaternion=object_quaternion,
+            )
         self.model.opt.timestep = self.timestep
         if self.model.nu != expected_actuators:
             raise ValueError(
-                f"G1 MuJoCo backend requires exactly {expected_actuators} actuators, "
-                f"model has {self.model.nu}"
+                f"G1 MuJoCo backend requires exactly {expected_actuators} actuators, model has {self.model.nu}"
             )
+        actuator_joint_ids = self.model.actuator_trnid[:, 0]
+        self.actuator_qpos_indices = self.model.jnt_qposadr[actuator_joint_ids].copy()
+        self.actuator_dof_indices = self.model.jnt_dofadr[actuator_joint_ids].copy()
         self.data = mujoco.MjData(self.model)  # pyright: ignore[reportAttributeAccessIssue]
         if self.model.nkey > 0:
             mujoco.mj_resetDataKeyframe(self.model, self.data, 0)  # pyright: ignore[reportAttributeAccessIssue]
         self._data_lock = Lock()
         self.elastic_support = ElasticSupport(self.model, scale=elastic_support_scale)
+        self.root_qpos_address = self.elastic_support.root_qpos_address
+        self.root_dof_address = self.elastic_support.root_dof_address
         self.step_mujoco()
 
     def step_mujoco(self) -> None:
@@ -131,15 +160,16 @@ class G1MujocoBackend:
             self.elastic_support.remove(self.data, support_force)
 
     def read_unlocked(self) -> MujocoState:
-        num_joints = self.model.nu
+        root_qpos = self.root_qpos_address
+        root_dof = self.root_dof_address
         return MujocoState(
-            joint_pos=snapshot(self.data.qpos[-num_joints:]),
-            joint_vel=snapshot(self.data.qvel[-num_joints:]),
+            joint_pos=snapshot(self.data.qpos[self.actuator_qpos_indices]),
+            joint_vel=snapshot(self.data.qvel[self.actuator_dof_indices]),
             joint_torque=snapshot(self.data.actuator_force),
-            base_quaternion_wxyz=snapshot(self.data.qpos[3:7]),
-            base_angular_velocity=snapshot(self.data.qvel[3:6]),
-            base_position_world=snapshot(self.data.qpos[0:3]),
-            base_linear_velocity_world=snapshot(self.data.qvel[0:3]),
+            base_quaternion_wxyz=snapshot(self.data.qpos[root_qpos + 3 : root_qpos + 7]),
+            base_angular_velocity=snapshot(self.data.qvel[root_dof + 3 : root_dof + 6]),
+            base_position_world=snapshot(self.data.qpos[root_qpos : root_qpos + 3]),
+            base_linear_velocity_world=snapshot(self.data.qvel[root_dof : root_dof + 3]),
         )
 
     def read(self) -> MujocoState:

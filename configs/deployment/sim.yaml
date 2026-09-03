@@ -2,6 +2,9 @@
 
 inspire_service: false
 
+camera:
+  _target_: g1_playground.simulation.mujoco_depth.MujocoDepthCamera
+
 env:
   domain_id: 1
   net_if: lo

@@ -15,23 +15,14 @@ class FakeRunner:
         return self.infer(inputs)
 
 
-def body_hand_runner():
+def body_hand_runner(observation_dim=787):
     base = np.linspace(-0.5, 0.5, 41, dtype=np.float32).reshape(1, 41)
 
     def infer(inputs):
         previous_action = np.asarray(inputs["obs"], dtype=np.float32)[:, -41:]
         return {"actions": base + 0.1 * previous_action}
 
-    return FakeRunner({"obs": (1, 787)}, {"actions": (1, 41)}, infer)
-
-
-def track_runner():
-    actions = np.linspace(-0.25, 0.25, 29, dtype=np.float32).reshape(1, 29)
-    return FakeRunner(
-        {"obs": (1, 167), "obs_history": (1, 10, 167)},
-        {"actions": (1, 29)},
-        lambda inputs: {"actions": actions.copy()},
-    )
+    return FakeRunner({"obs": (1, observation_dim)}, {"actions": (1, 41)}, infer)
 
 
 def leggedlab_runner():

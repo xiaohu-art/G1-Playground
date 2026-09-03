@@ -2,7 +2,7 @@ defaults:
   - robot: g1
   - robot@inspire: inspire
   - policy@loco: leggedlab_g1
-  - policy@hoi: body_hand_distill_largebox
+  - hoi: depth/largebox
   - policy@track: track
   - deployment: sim
   - override hydra/job_logging: disabled
@@ -10,8 +10,9 @@ defaults:
   - _self_
 
 motion:
-  file: assets/motions/clips/largebox_v02.npz
+  file: ${hoi.motion_file}
   name: null
+  interactive: true
 
 startup:
   ramp_seconds: 3.0

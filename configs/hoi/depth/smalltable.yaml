@@ -1,0 +1,15 @@
+defaults:
+  - /hoi/base@_here_
+  - _self_
+
+object: smalltable
+policy_file: assets/models/body_hand_distill/depth/smalltable/policy.onnx
+motion_file: assets/motions/smalltable_v02.npz
+object_mjcf: assets/objects/smalltable/object.xml
+
+depth:
+  width: 128
+  height: 72
+  min_distance: 0.25
+  max_distance: 3.0
+  stale_seconds: 0.15

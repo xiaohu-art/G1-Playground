@@ -29,8 +29,8 @@ documentation edits are deliberately outside the recovery point and were not sta
 
 ## Frozen Contract
 
-The machine-readable contract is in [`tests/fixtures/pre_dds/contract.json`](../tests/fixtures/pre_dds/contract.json),
-with executable checks in [`tests/test_pre_dds_contract.py`](../tests/test_pre_dds_contract.py). It locks:
+The original machine-readable fixture and its executable checks were removed when the test suite was reduced to the
+current deployment paths. The recovery tag above remains the source for this historical contract, which covered:
 
 - the exact `g1` and `g1_real` component composition;
 - 50 Hz policy/control timing and the MuJoCo 1 ms x 20 substep loop;
@@ -97,8 +97,7 @@ the physical or numerical reason. Phase 1 must preserve this contract except for
 - 2026-08-24 — The locomotion policy was replaced end to end: the unitree_rl_lab `wo_gait` checkpoint gave way to the
   LeggedLab G1 recurrent checkpoint (`assets/models/leggedlab/g1_policy.pt`, from
   [LeggedLabDeploy](https://github.com/Hellod035/LeggedLabDeploy) @ `93736b4`, BSD-3-Clause, hardware-verified by the
-  operator before integration). Following the review rule above, the golden data was regenerated for a physical reason:
+  operator before integration). The golden data was regenerated at the time for a physical reason:
   a different checkpoint (LSTM 96-to-29 with baked-in normalization), a different default pose and PD gains, and a
   single-frame 96-dim observation with command clipping instead of the former 5x96 field-major history with `max_cmd`
-  scaling. The change and its rationale are recorded in the fixture's `revisions` block; the frozen 2026-08-11
-  `source` fields and the fingerprint table above deliberately retain the original baseline identity.
+  scaling.

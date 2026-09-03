@@ -5,6 +5,16 @@ inspire_serial:
   left: /dev/serial/by-path/platform-3610000.usb-usb-0:2.1.2:1.0-port0
   right: /dev/serial/by-path/platform-3610000.usb-usb-0:2.1.4:1.0-port0
 
+camera:
+  _target_: g1_playground.camera.realsense.RealSenseDepthCamera
+  width: 480
+  height: 270
+  frequency: 60
+
+depth_preview:
+  host: 127.0.0.1
+  port: 9876
+
 env:
   domain_id: 0
   net_if: enP8p1s0

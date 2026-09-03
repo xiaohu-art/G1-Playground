@@ -6,6 +6,49 @@ from g1_playground.utils.math import TransformAlignment, quat_inv, quat_mul, qua
 GRAVITY_W = np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
 
+def reference_features(motion, frame, anchor_pos, anchor_quat) -> tuple[np.ndarray, np.ndarray]:
+    anchor_pos = np.asarray(anchor_pos, dtype=np.float32).reshape(3)
+    anchor_quat = np.asarray(anchor_quat, dtype=np.float32).reshape(4)
+    inverse = quat_inv(anchor_quat)
+    joint_pos, future_anchor_pos, future_anchor_quat, object_pos, object_quat, contact = motion.future(frame)
+    return (
+        np.concatenate(
+            [
+                joint_pos.reshape(-1),
+                quat_rotate(inverse, future_anchor_pos - anchor_pos).reshape(-1),
+                np.concatenate([quat_to_rot6d(quaternion) for quaternion in quat_mul(inverse, future_anchor_quat)]),
+                quat_rotate(inverse, object_pos - anchor_pos).reshape(-1),
+                np.concatenate([quat_to_rot6d(quaternion) for quaternion in quat_mul(inverse, object_quat)]),
+                contact.reshape(-1),
+            ],
+            dtype=np.float32,
+        ),
+        inverse,
+    )
+
+
+def proprioception_features(default_joint_pos, inverse, base_ang_vel, joint_pos, joint_vel, last_action) -> np.ndarray:
+    return np.concatenate(
+        [
+            np.asarray(base_ang_vel, dtype=np.float32).reshape(-1),
+            np.asarray(joint_pos, dtype=np.float32).reshape(-1) - default_joint_pos,
+            np.asarray(joint_vel, dtype=np.float32).reshape(-1),
+            quat_rotate(inverse, GRAVITY_W),
+            np.asarray(last_action, dtype=np.float32).reshape(-1),
+        ],
+        dtype=np.float32,
+    )
+
+
+def observation_vector(blocks, observation_dim: int) -> np.ndarray:
+    observation = np.concatenate(blocks, dtype=np.float32)
+    if observation.shape != (observation_dim,):
+        raise ValueError(f"Expected a {observation_dim}D observation, got {observation.shape}")
+    if not np.all(np.isfinite(observation)):
+        raise ValueError("Body-hand observation contains non-finite values")
+    return observation
+
+
 class ReferenceMotion:
     def __init__(
         self,
@@ -106,44 +149,3 @@ class JointAssembler:
         followers = self.hand_to_drivers.fit(hand_values) * self.multiplier + mimic_offset
         self.state_to_mimic.scatter_into(followers, values)
         return values
-
-
-class BodyHandObservation:
-    def __init__(self, motion: ReferenceMotion, default_joint_pos, observation_dim: int):
-        self.motion = motion
-        self.default_joint_pos = np.asarray(default_joint_pos, dtype=np.float32).reshape(-1)
-        self.observation_dim = int(observation_dim)
-
-    def build(self, frame, anchor_pos, anchor_quat, base_ang_vel, joint_pos, joint_vel, last_action) -> np.ndarray:
-        anchor_pos = np.asarray(anchor_pos, dtype=np.float32).reshape(3)
-        anchor_quat = np.asarray(anchor_quat, dtype=np.float32).reshape(4)
-        future_joint_pos, future_anchor_pos, future_anchor_quat, object_pos, object_quat, contact = self.motion.future(
-            frame
-        )
-        inverse = quat_inv(anchor_quat)
-        relative_pos = quat_rotate(inverse, future_anchor_pos - anchor_pos)
-        relative_quat = quat_mul(inverse, future_anchor_quat)
-
-        observation = np.concatenate(
-            [
-                future_joint_pos.reshape(-1),
-                relative_pos.reshape(-1),
-                np.concatenate([quat_to_rot6d(quaternion) for quaternion in relative_quat]),
-                quat_rotate(inverse, object_pos - anchor_pos).reshape(-1),
-                np.concatenate([quat_to_rot6d(quaternion) for quaternion in quat_mul(inverse, object_quat)]),
-                contact.reshape(-1),
-                quat_rotate(inverse, self.motion.object_pos[frame] - anchor_pos).reshape(-1),
-                quat_to_rot6d(quat_mul(inverse, self.motion.object_quat[frame])),
-                np.asarray(base_ang_vel, dtype=np.float32).reshape(-1),
-                np.asarray(joint_pos, dtype=np.float32).reshape(-1) - self.default_joint_pos,
-                np.asarray(joint_vel, dtype=np.float32).reshape(-1),
-                quat_rotate(inverse, GRAVITY_W),
-                np.asarray(last_action, dtype=np.float32).reshape(-1),
-            ],
-            dtype=np.float32,
-        )
-        if observation.shape != (self.observation_dim,):
-            raise ValueError(f"Expected a {self.observation_dim}D observation, got {observation.shape}")
-        if not np.all(np.isfinite(observation)):
-            raise ValueError("Body-hand observation contains non-finite values")
-        return observation

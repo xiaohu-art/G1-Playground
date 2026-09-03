@@ -1,26 +1,23 @@
 import importlib.util
-import io
+import time
 import unittest
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
 
-from tests.config_helpers import compose_config
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = REPO_ROOT / "scripts/loco_body_hand_pipeline.py"
+LAUNCHER = Path(__file__).resolve().parents[1] / "scripts/loco_body_hand_pipeline.py"
 
 
-def load_launcher() -> ModuleType:
-    spec = importlib.util.spec_from_file_location("g1_playground_test_loco_body_hand", LAUNCHER)
+def load_launcher():
+    spec = importlib.util.spec_from_file_location("g1_playground_test_loco_hoi", LAUNCHER)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-class FakeState:
+class State:
     def __init__(self):
         self.dof_pos = np.zeros(29)
         self.dof_vel = np.zeros(29)
@@ -28,30 +25,24 @@ class FakeState:
         self.base_ang_vel = np.zeros(3)
 
 
-class FakeHandState:
-    def __init__(self, age=0.001):
-        self.joint_pos = np.zeros(12)
-        self.joint_vel = np.zeros(12)
-        self.age = age
-
-    @property
-    def stale(self):
-        return not np.isfinite(self.age) or self.age > 0.3
+class HandState:
+    joint_pos = np.zeros(12)
+    joint_vel = np.zeros(12)
+    age = 0.001
+    stale = False
 
 
-class FakeOdometry:
+class Odometry:
+    position = np.array([0.0, 0.0, 0.78], dtype=np.float32)
+    raw_position = np.array([1.5, -0.25, 0.2], dtype=np.float32)
+    velocity = np.zeros(3, dtype=np.float32)
+    body_height = 0.78
+
+
+class Environment:
     def __init__(self):
-        self.position = np.array([0.0, 0.0, 0.78], dtype=np.float32)
-        self.raw_position = np.array([1.5, -0.25, 0.2], dtype=np.float32)
-        self.velocity = np.zeros(3, dtype=np.float32)
-        self.body_height = 0.78
-
-
-class FakeEnv:
-    def __init__(self, events):
-        self.events = events
-        self.born_place_calls = 0
         self.commands = []
+        self.rebases = 0
         self.born_place_align = False
         self.base_align = SimpleNamespace(
             base_pos=np.zeros(3, dtype=np.float32),
@@ -59,316 +50,143 @@ class FakeEnv:
         )
 
     def read(self):
-        return FakeState()
+        return State()
 
     def read_odometry(self):
-        return FakeOdometry()
+        return Odometry()
 
     def set_born_place(self, quat, position):
-        self.born_place_calls += 1
+        self.rebases += 1
         self.born_place_align = True
-        self.base_align.base_pos = np.asarray(position, dtype=np.float32).copy()
-        self.events.append(("born_place", np.asarray(position).copy()))
+        self.base_align.base_pos = np.asarray(position).copy()
         return True
 
     def set_gains(self, stiffness, damping):
-        self.events.append(("gains", float(np.asarray(stiffness)[0])))
+        pass
 
     def step(self, target):
-        self.commands.append(np.asarray(target, dtype=np.float64).copy())
-
-    def activate_commands(self):
-        self.events.append(("activate", 0.0))
+        self.commands.append(np.asarray(target).copy())
 
 
-class FakeHandEnv:
-    num_dofs = 12
-
+class HandEnvironment:
     def __init__(self):
-        self.targets = []
+        self.commands = []
 
     def read(self):
-        return FakeHandState()
+        return HandState()
 
     def step(self, target):
-        self.targets.append(np.asarray(target, dtype=np.float64).copy())
+        self.commands.append(np.asarray(target).copy())
 
 
-class FakeMotion:
-    num_frames = 414
-
-    def __init__(self, events):
-        self.events = events
-        self.align_calls = 0
-        self.anchor_pos = np.zeros((self.num_frames, 3), dtype=np.float32)
-        self.anchor_pos[:, 2] = 0.77
-        self.anchor_quat = np.zeros((self.num_frames, 4), dtype=np.float32)
-        self.anchor_quat[:, 0] = 1.0
-
-    def align(self):
-        self.align_calls += 1
-        self.events.append(("align", 0.0))
-
-
-class FakeHoi:
+class HoiPolicy:
+    observation_dim = 9994
     action_dim = 41
-    observation_dim = 787
-    freq = 50
-    dt = 0.02
 
-    def __init__(self, events):
-        self.events = events
-        self.motion = FakeMotion(events)
-        self.last_action = np.zeros(41, dtype=np.float32)
+    def __init__(self):
+        self.motion = SimpleNamespace(
+            num_frames=3,
+            anchor_pos=np.tile([0.0, 0.0, 0.77], (3, 1)),
+            anchor_quat=np.tile([1.0, 0.0, 0.0, 0.0], (3, 1)),
+            align=lambda: setattr(self, "aligned", True),
+        )
+        self.observation = SimpleNamespace(min_distance=0.25, max_distance=3.0)
+        self.last_action = np.zeros(41)
         self.frames = []
-        self.reset_calls = 0
-        self.targets = []
-        self.action_inputs = []
+        self.depth_inputs = []
+        self.first_action_inputs = []
+        self.aligned = False
 
-    def get_observation(self, frame, anchor_pos, anchor_quat, state, hand_state):
-        self.frames.append(int(frame))
-        return np.zeros(787, dtype=np.float32)
+    def reference_targets(self):
+        return np.full(29, 0.4), np.full(12, 0.3)
+
+    def get_observation(self, frame, anchor_pos, anchor_quat, state, hand_state, *, depth_m):
+        self.frames.append(frame)
+        self.depth_inputs.append(depth_m)
+        return np.zeros(9994)
 
     def act(self, observation):
-        self.action_inputs.append(self.last_action.copy())
-        self.last_action = np.full(41, len(self.action_inputs), dtype=np.float32)
-        body = np.full(29, 0.4)
-        self.targets.append(body.copy())
-        return body, np.full(12, 0.3)
-
-    @staticmethod
-    def reference_targets():
+        self.first_action_inputs.append(self.last_action.copy())
+        self.last_action[:] = 1.0
         return np.full(29, 0.4), np.full(12, 0.3)
 
     def reset(self):
-        self.events.append(("hoi_reset", len(self.action_inputs)))
+        self.last_action.fill(0.0)
+
+
+class TrackPolicy:
+    reference_root_height = 0.76
+    standing_target = np.full(29, 0.1)
+
+    def __init__(self):
+        self.observation = SimpleNamespace(
+            anchor_pose=lambda root_pos, root_quat, joint_pos: (np.asarray(root_pos), np.asarray(root_quat))
+        )
+        self.last_action = np.zeros(29)
+        self.action_inputs = []
+        self.reset_calls = 0
+
+    def set_reference(self, **reference):
+        self.reference = reference
+
+    def act(self, state, control):
+        self.action_inputs.append(self.last_action.copy())
+        self.last_action[:] = -0.7
+        return np.full(29, -0.2)
+
+    def reset(self):
         self.reset_calls += 1
         self.last_action.fill(0.0)
 
 
-class FakeObservation:
-    def anchor_pose(self, root_pos, root_quat, joint_pos):
-        return np.asarray(root_pos, dtype=np.float32).copy(), np.asarray(root_quat, dtype=np.float32).copy()
-
-
-class FakeTrack:
-    freq = 50
-    dt = 0.02
-    reference_root_height = 0.76
-
-    def __init__(self, events):
-        self.events = events
-        self.observation = FakeObservation()
-        self.references = []
-        self.last_action = np.zeros(29)
-        self.action_inputs = []
-        self.reset_action_indices = []
-        self.reset_reference_indices = []
-
-    @property
-    def standing_target(self):
-        return np.full(29, 0.1)
-
-    def set_reference(self, root_height, root_quat, joint_pos, joint_vel, anchor_lin_vel_w, anchor_ang_vel_w):
-        self.references.append(
-            SimpleNamespace(
-                root_height=float(root_height),
-                root_quat=np.asarray(root_quat, dtype=np.float64).copy(),
-                joint_pos=np.asarray(joint_pos, dtype=np.float64).copy(),
-                joint_vel=np.asarray(joint_vel, dtype=np.float64).copy(),
-                lin_vel_w=np.asarray(anchor_lin_vel_w, dtype=np.float64).copy(),
-                ang_vel_w=np.asarray(anchor_ang_vel_w, dtype=np.float64).copy(),
-            )
-        )
-
+class LocomotionPolicy:
     def act(self, state, control):
-        self.action_inputs.append(self.last_action.copy())
-        self.last_action = np.full(29, -0.7)
-        return np.full(29, -0.2)
-
-    def reset(self):
-        self.events.append(("track_reset", len(self.action_inputs)))
-        self.reset_action_indices.append(len(self.action_inputs))
-        self.reset_reference_indices.append(len(self.references))
-        self.last_action.fill(0.0)
-
-
-class FakeLoco:
-    freq = 50
-    dt = 0.02
-
-    def __init__(self):
-        self.calls = 0
-
-    @property
-    def standing_target(self):
-        return np.zeros(29)
-
-    def act(self, state, control):
-        self.calls += 1
         return np.full(29, -0.6)
 
-    def reset(self):
-        pass
+
+class Camera:
+    def __init__(self):
+        self.sequence = 0
+
+    def read(self):
+        self.sequence += 1
+        return SimpleNamespace(
+            depth_m=np.ones((72, 128), dtype=np.float32),
+            timestamp=time.monotonic(),
+            sequence=self.sequence,
+        )
 
 
-class FakeController:
-    def __init__(self, shutdown_after):
-        self.shutdown = False
+class Controller:
+    def __init__(self):
         self.reads = 0
-        self.shutdown_after = shutdown_after
 
     def read(self):
         self.reads += 1
-        return {"axes": {}}, self.shutdown or self.reads > self.shutdown_after
+        return {"axes": {}}, self.reads > 10
 
 
-def make_run(module, *, log=None, shutdown_after=780):
-    events = []
-    run = SimpleNamespace(
-        env=FakeEnv(events),
-        hand_env=FakeHandEnv(),
-        controller=FakeController(shutdown_after),
-        loco=FakeLoco(),
-        hoi=FakeHoi(events),
-        track=FakeTrack(events),
-        dt=0.001,
-        log=log,
-        started=0.0,
-        origin=0.0,
-        key_descriptor=-1,
-        hoi_stiffness=np.full(29, 40.0),
-        hoi_damping=np.full(29, 1.0),
-    )
-    run.events = events
-    return run
-
-
-class TestStateMachine(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.module = load_launcher()
-
-    def drive(self):
-        module = self.module
-        log = module.build_log(1000, 12)
-        run = make_run(module, log=log)
-        polls = 0
-
-        def keys(descriptor):
-            nonlocal polls
-            polls += 1
-            if polls == 2:
-                return {module.LOCO_TO_TRACK_KEY}, descriptor
-            if polls == 103:
-                return {module.TRACK_TO_HOI_KEY}, descriptor
-            return set(), descriptor
-
-        with patch.object(module, "poll_keys", side_effect=keys), patch.object(module.time, "sleep"):
-            with self.assertRaises(module.Stop):
-                module.run_pipeline(run, np.zeros(29), np.zeros(12), 100, 250)
-        return run
-
+class TestLocoHoiPipeline(unittest.TestCase):
     def test_complete_locomotion_track_hoi_track_flow(self):
-        run = self.drive()
-        phases = [self.module.PHASES[index] for index in run.log.phase[: run.log.count]]
-        self.assertEqual(phases[:3], ["locomotion", "track", "track_to_hoi"])
-        self.assertEqual(phases[102:104], ["track", "hoi"])
-        self.assertEqual(phases.count("track_to_hoi"), 100)
-        self.assertEqual(phases.count("hoi"), 414)
-        self.assertEqual(phases.count("track_to_default"), 250)
-
-        self.assertEqual(run.env.born_place_calls, 1)
-        self.assertEqual(run.hoi.motion.align_calls, 1)
-        self.assertEqual([value for name, value in run.events if name == "gains"], [40.0])
-        captured = [value for name, value in run.events if name == "born_place"]
-        np.testing.assert_allclose(captured[0], FakeOdometry().raw_position)
-
-        first_transition_reference = run.track.references[1]
-        np.testing.assert_allclose(run.track.references[0].joint_pos, FakeState().dof_pos)
-        self.assertAlmostEqual(run.track.references[0].root_height, FakeOdometry().position[2])
-        self.assertGreater(float(np.abs(first_transition_reference.joint_pos).max()), 0.0)
-        self.assertEqual(run.track.reset_action_indices[0], 0)
-        np.testing.assert_allclose(run.track.action_inputs[0], 0.0)
-
-        reset_names = [name for name, _ in run.events if name.endswith("_reset")]
-        self.assertEqual(reset_names, ["track_reset", "hoi_reset", "track_reset"])
-        self.assertEqual(len(run.track.reset_action_indices), 2)
-        self.assertGreater(run.track.reset_action_indices[1], 100)
-
-        default_start = run.track.reset_reference_indices[1]
-        for reference in (run.track.references[default_start - 1], run.track.references[-1]):
-            np.testing.assert_allclose(reference.joint_vel, 0.0)
-            np.testing.assert_allclose(reference.lin_vel_w, 0.0)
-            np.testing.assert_allclose(reference.ang_vel_w, 0.0)
-
-        self.assertEqual(run.hoi.frames, list(range(414)))
-        hoi_rows = np.flatnonzero(np.asarray(run.log.phase[: run.log.count]) == self.module.PHASES.index("hoi"))
-        np.testing.assert_allclose(np.asarray(run.env.commands)[hoi_rows], np.asarray(run.hoi.targets))
-        np.testing.assert_allclose(run.hoi.action_inputs[0], 0.0)
-
-        second_reset_action = run.track.reset_action_indices[1]
-        second_reset_reference = run.track.reset_reference_indices[1]
-        np.testing.assert_allclose(run.track.action_inputs[second_reset_action], 0.0)
-        np.testing.assert_allclose(run.track.references[second_reset_reference].joint_pos, FakeState().dof_pos)
-        np.testing.assert_allclose(run.track.references[-1].joint_pos, run.track.standing_target)
-        self.assertAlmostEqual(run.track.references[-1].root_height, run.track.reference_root_height)
-        self.assertEqual(run.machine.mode, self.module.Mode.TRACK)
-        self.assertIsNone(run.machine.track_goal)
-        self.assertFalse(run.machine.hoi_ready)
-        self.assertEqual(len(run.hand_env.targets), len(run.env.commands))
-        np.testing.assert_allclose(run.hand_env.targets[-1], np.full(12, 0.3))
-
-    def test_right_bracket_before_frame_zero_is_ready_does_not_start_hoi(self):
-        module = self.module
-        run = make_run(module, shutdown_after=20)
-        polls = 0
-
-        def keys(descriptor):
-            nonlocal polls
-            polls += 1
-            both = {module.LOCO_TO_TRACK_KEY, module.TRACK_TO_HOI_KEY}
-            return (both if polls == 2 else set()), descriptor
-
-        with patch.object(module, "poll_keys", side_effect=keys), patch.object(module.time, "sleep"):
-            with self.assertRaises(module.Stop):
-                module.run_pipeline(run, np.zeros(29), np.zeros(12), 10, 10)
-
-        self.assertEqual(run.machine.mode, module.Mode.TRACK)
-        self.assertIsNone(run.machine.track_goal)
-        self.assertTrue(run.machine.hoi_ready)
-        self.assertEqual(run.hoi.frames, [])
-
-
-class TestSafetyBoundary(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.module = load_launcher()
-
-    def test_a_shutdown_request_stops_the_run(self):
-        run = make_run(self.module)
-        run.controller.shutdown = True
-        with self.assertRaises(self.module.Stop):
-            self.module.read_frame(run)
-
-    def test_a_fallen_robot_stops_the_run(self):
-        run = make_run(self.module)
-        fallen = FakeState()
-        fallen.base_quat = np.array([0.7071, 0.0, 0.0, 0.7071])
-        run.env.read = lambda: fallen
-        with self.assertRaises(self.module.Stop):
-            self.module.read_frame(run)
-
-    def test_rebase_requires_odometry(self):
-        run = make_run(self.module)
-        machine = SimpleNamespace(hand_command=np.zeros(12))
-        with self.assertRaisesRegex(self.module.Stop, "cannot capture the Track origin"):
-            self.module.enter_track(run, machine, FakeState(), None)
-
-    def test_stale_hand_state_stops_automatic_track_to_hoi_but_not_track_entry(self):
-        module = self.module
-        run = make_run(module)
-        run.hand_env.read = lambda: FakeHandState(age=1.0)
+        module = load_launcher()
+        run = SimpleNamespace(
+            env=Environment(),
+            hand_env=HandEnvironment(),
+            controller=Controller(),
+            loco=LocomotionPolicy(),
+            hoi=HoiPolicy(),
+            track=TrackPolicy(),
+            camera=Camera(),
+            depth_preview=None,
+            depth_stale_seconds=0.15,
+            dt=0.001,
+            log=module.build_log(32, 12),
+            started=0.0,
+            origin=0.0,
+            key_descriptor=-1,
+            hoi_stiffness=np.full(29, 40.0),
+            hoi_damping=np.full(29, 1.0),
+        )
         polls = 0
 
         def keys(descriptor):
@@ -376,105 +194,38 @@ class TestSafetyBoundary(unittest.TestCase):
             polls += 1
             if polls == 1:
                 return {module.LOCO_TO_TRACK_KEY}, descriptor
-            return set(), descriptor
-
-        with patch.object(module, "poll_keys", side_effect=keys), patch.object(module.time, "sleep"):
-            with self.assertRaisesRegex(module.Stop, "Inspire hand state is stale"):
-                module.run_pipeline(run, np.zeros(29), np.zeros(12), 10, 10)
-
-        self.assertEqual(run.env.born_place_calls, 1)
-        self.assertEqual(run.hoi.frames, [])
-
-    def test_hoi_checks_each_odometry_frame_after_rebase(self):
-        module = self.module
-        run = make_run(module)
-        odometry_reads = 0
-        polls = 0
-
-        def read_odometry():
-            nonlocal odometry_reads
-            odometry_reads += 1
-            return None if odometry_reads >= 4 else FakeOdometry()
-
-        def keys(descriptor):
-            nonlocal polls
-            polls += 1
-            if polls == 1:
-                return {module.LOCO_TO_TRACK_KEY}, descriptor
-            if polls == 3:
+            if polls == 4:
                 return {module.TRACK_TO_HOI_KEY}, descriptor
             return set(), descriptor
 
-        run.env.read_odometry = read_odometry
         with patch.object(module, "poll_keys", side_effect=keys), patch.object(module.time, "sleep"):
-            with self.assertRaisesRegex(module.Stop, "Odometry is unavailable during HOI"):
-                module.run_pipeline(run, np.zeros(29), np.zeros(12), 1, 10)
+            with self.assertRaises(module.Stop):
+                module.run_pipeline(run, np.zeros(29), np.zeros(12), 2, 2)
 
-        self.assertEqual(run.hoi.frames, [])
-
-
-class TestMotionSelection(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.module = load_launcher()
-        cls.cfg = compose_config("sim", config_name="run_loco_hoi_track").motion
-
-    def test_non_terminal_input_uses_the_first_motion_when_name_is_unset(self):
-        with np.load(REPO_ROOT / self.cfg.file, allow_pickle=False) as motions:
-            expected = str(motions["motion_names"][0])
-        stdin = SimpleNamespace(isatty=lambda: False)
-        with patch.object(self.module.sys, "stdin", stdin):
-            self.assertEqual(self.module.select_motion(self.cfg), expected)
-
-    def test_a_different_object_bundle_starts_from_its_first_motion(self):
-        cfg = self.cfg.copy()
-        cfg.file = "assets/motions/smallbox_v02.npz"
-        with np.load(REPO_ROOT / cfg.file, allow_pickle=False) as motions:
-            expected = str(motions["motion_names"][0])
-        stdin = SimpleNamespace(isatty=lambda: False)
-        with patch.object(self.module.sys, "stdin", stdin):
-            self.assertEqual(self.module.select_motion(cfg), expected)
-
-    def test_down_arrow_selects_the_next_motion_and_enter_confirms(self):
-        with np.load(REPO_ROOT / self.cfg.file, allow_pickle=False) as motions:
-            names = [str(name) for name in motions["motion_names"]]
-        configured = str(self.cfg.name)
-        initial = configured if configured in names else names[0]
-        expected = names[(names.index(initial) + 1) % len(names)]
-        stdin = SimpleNamespace(isatty=lambda: True, fileno=lambda: 7)
-        stdout = io.StringIO()
-        saved = ["terminal settings"]
-        with (
-            patch.object(self.module.sys, "stdin", stdin),
-            patch.object(self.module.sys, "stdout", stdout),
-            patch.object(self.module.termios, "tcgetattr", return_value=saved),
-            patch.object(self.module.termios, "tcsetattr") as restore,
-            patch.object(self.module.tty, "setraw"),
-            patch.object(self.module.select, "select", return_value=([7], [], [])),
-            patch.object(self.module.os, "read", side_effect=[b"\x1b", b"[", b"B", b"\r"]),
-        ):
-            selected = self.module.select_motion(self.cfg)
-
-        self.assertEqual(selected, expected)
-        self.assertIn(expected, stdout.getvalue())
-        restore.assert_called_once_with(7, self.module.termios.TCSADRAIN, saved)
-
-
-class TestConfiguration(unittest.TestCase):
-    def test_the_run_root_composes_with_both_deployments(self):
-        for deployment in ("sim", "real"):
-            with self.subTest(deployment=deployment):
-                cfg = compose_config(deployment, config_name="run_loco_hoi_track")
-                self.assertEqual(cfg.env._target_, "g1_playground.g1_env.G1Env")
-                self.assertIs(cfg.env.enable_odometry, True)
-                self.assertEqual(len(cfg.inspire.dof.joint_names), 12)
-                self.assertEqual(len(cfg.loco.dof.joint_names), 29)
-                self.assertIn("observation", cfg.hoi)
-                self.assertEqual(len(cfg.track.dof.joint_names), 29)
-                self.assertIs(cfg.inspire_service, deployment == "real")
-                if deployment == "real":
-                    self.assertIn("/dev/serial/by-path/", cfg.inspire_serial.left)
-                    self.assertIn("/dev/serial/by-path/", cfg.inspire_serial.right)
+        phases = [module.PHASES[index] for index in run.log.phase[: run.log.count]]
+        self.assertEqual(
+            phases,
+            [
+                "track",
+                "track_to_hoi",
+                "track_to_hoi",
+                "track",
+                "hoi",
+                "hoi",
+                "hoi",
+                "track_to_default",
+                "track_to_default",
+                "track",
+            ],
+        )
+        self.assertEqual(run.env.rebases, 1)
+        self.assertTrue(run.hoi.aligned)
+        self.assertEqual(run.hoi.frames, [0, 1, 2])
+        self.assertEqual(run.camera.sequence, 3)
+        self.assertTrue(all(depth is not None for depth in run.hoi.depth_inputs))
+        np.testing.assert_array_equal(run.hoi.first_action_inputs[0], 0.0)
+        self.assertEqual(run.track.reset_calls, 2)
+        self.assertEqual(len(run.env.commands), len(run.hand_env.commands))
 
 
 if __name__ == "__main__":

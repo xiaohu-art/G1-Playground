@@ -25,8 +25,9 @@ from g1_playground.inspire.hand_env import InspireHandEnv
 from g1_playground.inspire.service import InspireService
 from g1_playground.policy import LeggedLabPolicy
 from g1_playground.policy.body_hand import BodyHandPolicy
+from g1_playground.policy.body_hand.depth import DepthPreviewServer
+from g1_playground.policy.body_hand.motion import select_motion
 from g1_playground.policy.track import TrackPolicy
-from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import compose_dof_config
 from g1_playground.utils.logger import setup_logger
 from g1_playground.utils.math import is_upright, quat_angular_velocity, quat_slerp, yaw_quat
@@ -35,8 +36,6 @@ from g1_playground.utils.recorder import record, recorder, save_recording
 logger = logging.getLogger("g1_playground")
 LOCO_TO_TRACK_KEY = b"["
 TRACK_TO_HOI_KEY = b"]"
-MOTION_UP_KEY = b"\x1b[A"
-MOTION_DOWN_KEY = b"\x1b[B"
 WARMUP_STEPS = 3
 ZERO_CONTROL = {"axes": {"LeftX": 0.0, "LeftY": 0.0, "RightX": 0.0}}
 IDLE_CONTROL = {"axes": {}}
@@ -51,49 +50,6 @@ class Mode(Enum):
 
 class Stop(RuntimeError):
     pass
-
-
-def select_motion(cfg_motion):
-    with np.load(resolve_repo_path(cfg_motion.file), allow_pickle=False) as motions:
-        names = [str(name) for name in motions["motion_names"]]
-    selected = str(cfg_motion.name)
-    if selected not in names:
-        selected = names[0]
-    if not sys.stdin.isatty():
-        logger.warning("stdin is not a terminal; using configured HOI motion %s", selected)
-        return selected
-
-    descriptor = sys.stdin.fileno()
-    saved = termios.tcgetattr(descriptor)
-    index = names.index(selected)
-    try:
-        tty.setraw(descriptor)
-        while True:
-            sys.stdout.write(
-                f"\r\033[2KSelect HOI motion with Up/Down, Enter confirms [{index + 1}/{len(names)}]: {names[index]}"
-            )
-            sys.stdout.flush()
-            key = os.read(descriptor, 1)
-            if key == b"\x1b":
-                for _ in range(2):
-                    if not select.select([descriptor], [], [], 0.05)[0]:
-                        break
-                    key += os.read(descriptor, 1)
-            if key == MOTION_UP_KEY:
-                index = (index - 1) % len(names)
-            elif key == MOTION_DOWN_KEY:
-                index = (index + 1) % len(names)
-            elif key in (b"\r", b"\n"):
-                selected = names[index]
-                break
-            elif key == b"\x03":
-                raise KeyboardInterrupt
-    finally:
-        termios.tcsetattr(descriptor, termios.TCSADRAIN, saved)
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-    logger.warning("Selected HOI motion: %s", selected)
-    return selected
 
 
 def open_key_reader():
@@ -136,7 +92,17 @@ def read_frame(run):
     return state, hand_state, odometry, control
 
 
-def record_frame(run, phase, frame, state, hand_state, odometry, body_target, hand_target) -> None:
+def record_frame(
+    run,
+    phase,
+    frame,
+    state,
+    hand_state,
+    odometry,
+    body_target,
+    hand_target,
+    depth_diagnostics=None,
+) -> None:
     log = run.log
     if log is None or log.count >= log.phase.shape[0]:
         return
@@ -145,13 +111,31 @@ def record_frame(run, phase, frame, state, hand_state, odometry, body_target, ha
     log.motion_frame[index] = -1 if frame is None else frame
     log.hand_pos[index] = hand_state.joint_pos
     log.hand_target[index] = hand_target
+    if depth_diagnostics is not None:
+        (
+            log.depth_sequence[index],
+            log.depth_age[index],
+            log.depth_valid_ratio[index],
+            log.depth_min[index],
+            log.depth_max[index],
+        ) = depth_diagnostics
     record(log, run.started - run.origin, state, body_target, odometry, run.env)
 
 
-def step_envs(run, phase, frame, state, hand_state, odometry, body_target, hand_target) -> None:
+def step_envs(run, phase, frame, state, hand_state, odometry, body_target, hand_target, depth_diagnostics=None) -> None:
     run.env.step(body_target)
     run.hand_env.step(hand_target)
-    record_frame(run, phase, frame, state, hand_state, odometry, body_target, hand_target)
+    record_frame(
+        run,
+        phase,
+        frame,
+        state,
+        hand_state,
+        odometry,
+        body_target,
+        hand_target,
+        depth_diagnostics,
+    )
     remaining = run.dt - (time.monotonic() - run.started)
     if remaining > 0:
         time.sleep(remaining)
@@ -333,6 +317,12 @@ def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps
         state, hand_state, odometry, control = read_frame(run)
         keys, run.key_descriptor = poll_keys(run.key_descriptor)
         frame = None
+        depth_diagnostics = None
+        depth_frame = None
+        if run.depth_preview is not None or machine.mode is Mode.HOI:
+            depth_frame = run.camera.read()
+            if run.depth_preview is not None:
+                run.depth_preview.publish(depth_frame)
 
         match machine.mode:
             case Mode.LOCOMOTION:
@@ -416,8 +406,32 @@ def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps
                     raise Stop("Odometry is unavailable during HOI")
                 if hand_state.stale:
                     raise Stop(f"Inspire hand state is stale ({hand_state.age:.3f}s)")
+                depth_age = time.monotonic() - depth_frame.timestamp
+                if not np.isfinite(depth_age) or depth_age > run.depth_stale_seconds:
+                    raise Stop(f"Depth frame is stale ({depth_age:.3f}s)")
+                depth_m = depth_frame.depth_m
+                valid = (
+                    np.isfinite(depth_m)
+                    & (depth_m > run.hoi.observation.min_distance)
+                    & (depth_m < run.hoi.observation.max_distance)
+                )
+                valid_depth = depth_m[valid]
+                depth_diagnostics = (
+                    depth_frame.sequence,
+                    depth_age,
+                    float(valid.mean()),
+                    float(valid_depth.min()) if valid_depth.size else np.nan,
+                    float(valid_depth.max()) if valid_depth.size else np.nan,
+                )
                 base_quat_wxyz = np.asarray(state.base_quat, dtype=np.float32)[[3, 0, 1, 2]]
-                observation = run.hoi.get_observation(frame, odometry.position, base_quat_wxyz, state, hand_state)
+                observation = run.hoi.get_observation(
+                    frame,
+                    odometry.position,
+                    base_quat_wxyz,
+                    state,
+                    hand_state,
+                    depth_m=depth_m,
+                )
                 body_target, hand_target = run.hoi.act(observation)
                 if frame == 0:
                     logger.warning(
@@ -442,6 +456,7 @@ def run_pipeline(run, body_command, hand_command, to_hoi_steps, to_default_steps
             odometry,
             machine.body_command,
             machine.hand_command,
+            depth_diagnostics,
         )
 
 
@@ -451,6 +466,11 @@ def build_log(capacity, hand_dofs):
     log.motion_frame = np.full(capacity, -1, dtype=np.int32)
     log.hand_pos = np.full((capacity, hand_dofs), np.nan, dtype=np.float32)
     log.hand_target = np.full((capacity, hand_dofs), np.nan, dtype=np.float32)
+    log.depth_sequence = np.full(capacity, -1, dtype=np.int64)
+    log.depth_age = np.full(capacity, np.nan, dtype=np.float32)
+    log.depth_valid_ratio = np.full(capacity, np.nan, dtype=np.float32)
+    log.depth_min = np.full(capacity, np.nan, dtype=np.float32)
+    log.depth_max = np.full(capacity, np.nan, dtype=np.float32)
     log.phase_names = np.asarray(PHASES, dtype="<U16")
     return log
 
@@ -460,6 +480,8 @@ def run(cfg: DictConfig) -> None:
     setup_logger()
     env = None
     hand_env = None
+    camera = None
+    depth_preview = None
     inspire_service = None
     log = None
     saved_terminal = None
@@ -488,6 +510,7 @@ def run(cfg: DictConfig) -> None:
             inspire_service.start()
         hand_env = InspireHandEnv(dof_cfg=cfg.inspire.dof, domain_id=cfg.env.domain_id, net_if=cfg.env.net_if)
         controller = instantiate(cfg.controller, env=env)
+        camera = instantiate(cfg.camera)
 
         body_control = cfg.hoi.action.body.control
         run = SimpleNamespace(
@@ -497,6 +520,9 @@ def run(cfg: DictConfig) -> None:
             loco=loco,
             hoi=hoi,
             track=track,
+            camera=camera,
+            depth_preview=None,
+            depth_stale_seconds=float(cfg.hoi.depth.stale_seconds),
             dt=loco.dt,
             log=None,
             started=0.0,
@@ -511,6 +537,17 @@ def run(cfg: DictConfig) -> None:
 
         env.self_check()
         hand_env.self_check()
+        camera.self_check()
+        if "depth_preview" in cfg:
+            depth_preview = DepthPreviewServer(
+                height=cfg.hoi.depth.height,
+                width=cfg.hoi.depth.width,
+                min_distance=cfg.hoi.depth.min_distance,
+                max_distance=cfg.hoi.depth.max_distance,
+                host=cfg.depth_preview.host,
+                port=cfg.depth_preview.port,
+            )
+            run.depth_preview = depth_preview
         warm_up_policies(run)
         run.key_descriptor, saved_terminal = open_key_reader()
 
@@ -529,6 +566,10 @@ def run(cfg: DictConfig) -> None:
     finally:
         if saved_terminal is not None:
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved_terminal)
+        if depth_preview is not None:
+            depth_preview.shutdown()
+        if camera is not None:
+            camera.shutdown()
         if hand_env is not None:
             hand_env.shutdown()
         if env is not None:

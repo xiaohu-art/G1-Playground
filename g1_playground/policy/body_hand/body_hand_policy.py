@@ -3,7 +3,9 @@ import logging
 import numpy as np
 from omegaconf import DictConfig
 
-from g1_playground.policy.body_hand.observation import BodyHandObservation, JointAssembler, ReferenceMotion
+from g1_playground.policy.body_hand.depth import DepthBodyHandObservation
+from g1_playground.policy.body_hand.motion import motion_bounds
+from g1_playground.policy.body_hand.observation import JointAssembler, ReferenceMotion
 from g1_playground.policy.tensorrt_runner import TensorRTRunner
 from g1_playground.utils import resolve_repo_path
 from g1_playground.utils.dof import DoFAdapter
@@ -58,9 +60,18 @@ class BodyHandPolicy:
             raise ValueError("Body-hand policy configuration does not match the ONNX tensor dimensions")
 
         self.motion = self._load_motion(cfg_motion, observation_joint_names, cfg_policy.observation.future_offsets)
-        self.observation = BodyHandObservation(self.motion, default_joint_pos, self.observation_dim)
+        self.observation = DepthBodyHandObservation(
+            self.motion,
+            default_joint_pos,
+            self.observation_dim,
+            height=cfg_policy.depth.height,
+            width=cfg_policy.depth.width,
+            min_distance=cfg_policy.depth.min_distance,
+            max_distance=cfg_policy.depth.max_distance,
+        )
+
         self._last_action = np.zeros(self.action_dim, dtype=np.float32)
-        self.observation.build(
+        initial_observation = (
             0,
             self.motion.anchor_pos[0],
             self.motion.anchor_quat[0],
@@ -68,6 +79,10 @@ class BodyHandPolicy:
             default_joint_pos,
             np.zeros_like(default_joint_pos),
             self._last_action,
+        )
+        self.observation.build(
+            *initial_observation,
+            np.zeros((cfg_policy.depth.height, cfg_policy.depth.width), dtype=np.float32),
         )
 
         logger.info(
@@ -85,14 +100,7 @@ class BodyHandPolicy:
             if fps != self.freq:
                 raise ValueError(f"Reference motion is {fps} Hz but the policy runs at {self.freq} Hz")
 
-            names = [str(name) for name in motions["motion_names"]]
-            try:
-                index = names.index(str(cfg_motion.name))
-            except ValueError as error:
-                raise ValueError(f"Reference motion {cfg_motion.name!r} is not in {cfg_motion.file}") from error
-            lengths = np.asarray(motions["motion_lengths"], dtype=np.int64)
-            start = int(lengths[:index].sum())
-            stop = start + int(lengths[index])
+            start, stop = motion_bounds(motions, cfg_motion.name, cfg_motion.file)
             return ReferenceMotion(
                 motions["joint_pos"][start:stop],
                 motions["anchor_pos_w"][start:stop],
@@ -134,11 +142,18 @@ class BodyHandPolicy:
     def last_action(self) -> np.ndarray:
         return self._last_action.copy()
 
-    def get_observation(self, frame, anchor_pos, anchor_quat, body_state, hand_state) -> np.ndarray:
+    def get_observation(self, frame, anchor_pos, anchor_quat, body_state, hand_state, *, depth_m) -> np.ndarray:
         joint_pos, joint_vel = self.joint_state(body_state, hand_state)
-        return self.observation.build(
-            frame, anchor_pos, anchor_quat, body_state.base_ang_vel, joint_pos, joint_vel, self._last_action
+        arguments = (
+            frame,
+            anchor_pos,
+            anchor_quat,
+            body_state.base_ang_vel,
+            joint_pos,
+            joint_vel,
+            self._last_action,
         )
+        return self.observation.build(*arguments, depth_m)
 
     def act(self, observation: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         raw_action = self.infer(observation)

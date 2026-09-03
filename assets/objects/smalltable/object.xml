@@ -1,0 +1,30 @@
+<mujoco model="smalltable">
+  <compiler meshdir="."/>
+
+  <asset>
+    <mesh name="smalltable_visual_mesh" file="visual.obj"/>
+    <mesh name="smalltable_collision_mesh_00" file="collision/part_00.obj"/>
+    <mesh name="smalltable_collision_mesh_01" file="collision/part_01.obj"/>
+    <mesh name="smalltable_collision_mesh_02" file="collision/part_02.obj"/>
+    <mesh name="smalltable_collision_mesh_03" file="collision/part_03.obj"/>
+    <mesh name="smalltable_collision_mesh_04" file="collision/part_04.obj"/>
+  </asset>
+
+  <worldbody>
+    <body name="hoi_object" pos="1 0 0.35113797">
+      <freejoint name="hoi_object_freejoint"/>
+      <geom name="hoi_object_visual" type="mesh" mesh="smalltable_visual_mesh" mass="0"
+            contype="0" conaffinity="0" group="2" rgba="0.85 0.45 0.20 1"/>
+      <geom name="hoi_object_collision_00" type="mesh" mesh="smalltable_collision_mesh_00"
+            density="200" friction="1 0.005 0.0001" solref="0.02 1" margin="0.005" rgba="0 0 0 0"/>
+      <geom name="hoi_object_collision_01" type="mesh" mesh="smalltable_collision_mesh_01"
+            density="200" friction="1 0.005 0.0001" solref="0.02 1" margin="0.005" rgba="0 0 0 0"/>
+      <geom name="hoi_object_collision_02" type="mesh" mesh="smalltable_collision_mesh_02"
+            density="200" friction="1 0.005 0.0001" solref="0.02 1" margin="0.005" rgba="0 0 0 0"/>
+      <geom name="hoi_object_collision_03" type="mesh" mesh="smalltable_collision_mesh_03"
+            density="200" friction="1 0.005 0.0001" solref="0.02 1" margin="0.005" rgba="0 0 0 0"/>
+      <geom name="hoi_object_collision_04" type="mesh" mesh="smalltable_collision_mesh_04"
+            density="200" friction="1 0.005 0.0001" solref="0.02 1" margin="0.005" rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+</mujoco>
